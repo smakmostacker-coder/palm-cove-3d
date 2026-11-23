@@ -7,12 +7,20 @@
 // happen — somebody has to report them first. A crime with a witness (any
 // pedestrian or officer within 26 units) is phoned in after ~1.2 s; loud
 // crimes (gunfire, explosions) are heard from much further and reported
-// after ~0.8 s; a victim reports their own carjacking after ~0.8 s; alarms
-// and victims report jewelry robberies, debtor hits and marked-car thefts
-// after ~0.9 s. A crime nobody sees or hears in an empty area is never
-// reported and never raises wanted. While units are already engaged (an
-// active car or a chasing officer within 65 units) every further crime is
-// seen by them and applies instantly, as does the scripted police chase.
+// after ~0.8 s; alarms and victims report jewelry robberies, debtor hits
+// and marked-car thefts after ~0.9 s. A crime nobody sees or hears in an
+// empty area is never reported and never raises wanted. While units are
+// already engaged (an active car or a chasing officer within 65 units)
+// every further crime is seen by them and applies instantly, as does the
+// scripted police chase.
+//
+// CAR-TAKING (Round 4): taking a vehicle — stealing a parked car or
+// carjacking a civilian — is the exception: it is reported ONLY if a
+// police unit (an active patrol car or a foot officer) is within 26
+// units at the moment of the theft, and then it is phoned in after
+// ~1.2 s like any witnessed crime. Civilians never report a car-taking
+// and neither does the carjack victim; with no police unit within
+// 26 units the theft is never reported and never raises wanted.
 //
 // RESPONSE: cars spawn ON the street grid and route along it (nearest
 // intersection → the target's cross street → final approach), so a response
@@ -140,11 +148,29 @@ export function buildPolice(scene) {
 const LOUD = { 'Shots fired': 70, 'Sniper fire': 55, 'Vehicle explosion': 85 };
 const ALARM = new Set(['Jewelry robbery', 'Debtor taken out', 'Marked car stolen']);
 const INSTANT = new Set(['Police chase']); // the police are already right there
+const CAR_TAKING = new Set(['Vehicle stolen', 'Carjacking']); // police eyes only — see policeWitnessed()
 
 function witnessed(pos, r) {
   const r2 = r * r;
   for (const p of peds) {
     const dx = p.mesh.position.x - pos.x, dz = p.mesh.position.z - pos.z;
+    if (dx * dx + dz * dz < r2) return true;
+  }
+  for (const o of officers) {
+    if (o.mode === 'reserve') continue;
+    const dx = o.pos.x - pos.x, dz = o.pos.z - pos.z;
+    if (dx * dx + dz * dz < r2) return true;
+  }
+  return false;
+}
+// Car-taking is reported by police eyes only: an active (non-jacked)
+// patrol car or a foot officer within r of the crime. Civilians and the
+// carjack victim never count here, unlike in witnessed() above.
+function policeWitnessed(pos, r) {
+  const r2 = r * r;
+  for (const c of cops) {
+    if (!c.active || c.jacked) continue;
+    const dx = c.pos.x - pos.x, dz = c.pos.z - pos.z;
     if (dx * dx + dz * dz < r2) return true;
   }
   for (const o of officers) {
@@ -170,7 +196,8 @@ export function commitCrime(stars, label, opts = {}) {
   const pos = opts.pos || playerRef;
   if (opts.instant || INSTANT.has(label) || engaged(pos)) { applyStars(stars); return; }
   let delay = -1;
-  if (opts.victim || ALARM.has(label)) delay = 0.9; // the victim / the alarm phones it in
+  if (CAR_TAKING.has(label)) { if (pos && policeWitnessed(pos, 26)) delay = 1.2; } // police unit in sight range, or never reported
+  else if (opts.victim || ALARM.has(label)) delay = 0.9; // the victim / the alarm phones it in
   else if (LOUD[label]) { if (pos && witnessed(pos, LOUD[label])) delay = 0.8; }
   else if (pos && witnessed(pos, 26)) delay = 1.2;
   if (delay < 0) return; // nobody saw or heard it — it never reaches dispatch
@@ -214,6 +241,35 @@ function routePoint(c, targetPos) {
 }
 
 // ---- Foot officers -----------------------------------------------------------
+// Officer↔player separation (Round 4): a chasing officer stops at arm's
+// length (PLAYER_STOP) instead of walking into the player's exact
+// position and fusing with her model. The bust rule is untouched — it
+// counts any unit within 9 units while the player is barely moving, so
+// an officer held at 1.4 still busts her cleanly from arm's length.
+const PLAYER_STOP = 1.4;
+// Hard post-move clamp for EVERY non-reserve officer (chase, return,
+// patrol, prison post): if he ended up closer than PLAYER_STOP to the
+// player, push him back out along the separation vector to exactly
+// PLAYER_STOP. The pushed position resolves against buildings; if that
+// resolution shoves him back inside the stop distance (push fully
+// blocked), the stop-distance destination itself wins — the invariant
+// after updateOfficers is: no officer is ever < ~1.2 units from the
+// player (in practice exactly >= 1.4, modulo the blocked case = 1.4).
+function separateFromPlayer(o, targetPos) {
+  const dx = o.pos.x - targetPos.x, dz = o.pos.z - targetPos.z;
+  const d = Math.hypot(dx, dz);
+  if (d >= PLAYER_STOP) return false;
+  const ux = d > 1e-4 ? dx / d : Math.sin(o.mesh.rotation.y);
+  const uz = d > 1e-4 ? dz / d : Math.cos(o.mesh.rotation.y);
+  const sx = targetPos.x + ux * PLAYER_STOP, sz = targetPos.z + uz * PLAYER_STOP;
+  o.pos.x = sx; o.pos.z = sz;
+  collideBuildings(o.pos, 0.45);
+  const d2 = Math.hypot(o.pos.x - targetPos.x, o.pos.z - targetPos.z);
+  if (d2 < 1.2) { o.pos.x = sx; o.pos.z = sz; } // blocked: stop-distance point wins over the wall
+  o.pos.y = groundHeightFor(o, o.pos.x, o.pos.z, null) + 0.3;
+  return true;
+}
+
 function walkBeat(o, dt) {
   const b = o.beat;
   b.t += 1.9 * b.dir * dt;
@@ -304,13 +360,29 @@ function updateOfficers(dt, targetPos) {
       // player drives off — an officer on foot does not chase a car.
       if (G.wanted === 0 || d > 62 || (G.driving && d > 13)) { o.mode = 'return'; }
       else {
-        slideMove(o, targetPos.x, targetPos.z, 10.6, dt, 0.45);
+        // Approach a destination pulled back to arm's length along the
+        // approach direction, never the player's exact position; at the
+        // stop distance he holds there, still facing her.
+        let destX = o.pos.x, destZ = o.pos.z;
+        if (d > PLAYER_STOP) {
+          destX = targetPos.x - ((targetPos.x - o.pos.x) / d) * PLAYER_STOP;
+          destZ = targetPos.z - ((targetPos.z - o.pos.z) / d) * PLAYER_STOP;
+        }
+        slideMove(o, destX, destZ, 10.6, dt, 0.45);
         o.mesh.rotation.y = Math.atan2(targetPos.x - o.pos.x, targetPos.z - o.pos.z);
         o.pos.y = groundHeightFor(o, o.pos.x, o.pos.z, null) + 0.3;
-        o.swing += dt * 21;
-        posePerson(o.mesh, o.swing, 0.95, 0.95, 0.2, G.time * 2);
-        nearest = Math.min(nearest, d);
-        if (d < 45) anyLOS = true;
+        const nd = Math.hypot(targetPos.x - o.pos.x, targetPos.z - o.pos.z);
+        if (nd <= PLAYER_STOP + 0.05) {
+          // Holding at arm's length: the stride settles into a grabbing
+          // reach — he keeps working at her, not frozen mid-stride.
+          o.swing += dt * 3;
+          posePerson(o.mesh, o.swing, 0.35, 0.4, 0.08, G.time * 2);
+        } else {
+          o.swing += dt * 21;
+          posePerson(o.mesh, o.swing, 0.95, 0.95, 0.2, G.time * 2);
+        }
+        nearest = Math.min(nearest, nd);
+        if (nd < 45) anyLOS = true;
       }
     } else if (o.mode === 'return') {
       const home = homeFor(o);
@@ -330,6 +402,10 @@ function updateOfficers(dt, targetPos) {
         }
       }
     }
+    // Hard clamp, every mode: a patrol/post/return path that crosses the
+    // player's space (or a chase slide that still ended close) can never
+    // leave an officer fused with the player.
+    separateFromPlayer(o, targetPos);
   }
   return { nearest, anyLOS };
 }
@@ -363,8 +439,14 @@ export function updatePolice(dt, targetPos, targetSpeed, onBusted) {
     }
     c.mesh.position.y = groundHeightFor(c, c.pos.x, c.pos.z, null);
     c.mesh.rotation.y = c.angle;
-    if (c.mesh.userData.lightbar) {
-      c.mesh.userData.lightbar.material.color.setHex(Math.floor(G.time * 6) % 2 ? 0xff0000 : 0x0066ff);
+    const lb = c.mesh.userData.lightbar;
+    if (lb && lb.userData.lenses) {
+      // Two-lens bar: the red and blue halves flash in alternation.
+      const ph = Math.floor(G.time * 6) % 2;
+      lb.userData.lenses[0].material.color.setHex(ph ? 0xff2222 : 0x4a0d0d);
+      lb.userData.lenses[1].material.color.setHex(ph ? 0x123a7a : 0x2f7bff);
+    } else if (lb) {
+      lb.material.color.setHex(Math.floor(G.time * 6) % 2 ? 0xff0000 : 0x0066ff);
     }
     for (const w of c.mesh.userData.wheels) w.rotation.x += speed * dt * 2;
     // Stopped at the player's feet with the player on foot: the officer

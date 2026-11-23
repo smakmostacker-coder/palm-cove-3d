@@ -7,6 +7,7 @@
 import { ROADS, ROAD_W } from './config.js';
 import { makeRng, pick } from './random.js';
 import { makePerson, posePerson, collideProps } from './city.js';
+import { player } from './player.js'; // no cycle: player.js never imports pedestrians.js
 
 export const peds = []; // {mesh, axis, line, side, t, dir, speed, flee, flagged, swing, down}
 const SHIRTS = [0xff6b81, 0x7bed9f, 0x70a1ff, 0xeccc68, 0xff7f50, 0xa4b0be, 0x2ed573, 0x5352ed];
@@ -78,6 +79,24 @@ export function updatePeds(dt, dangerPos, dangerRadius) {
     pos.x = Math.max(-230, Math.min(230, pos.x));
     pos.z = Math.max(-198, Math.min(430, pos.z));
     collideProps(pos, 0.35); // step around lamps, trees and hydrants
+    // Player separation (Round 4): a stroll route or flee vector can carry
+    // a ped straight through the player's space — peds yield, the player
+    // is never shoved. Push the PED out to 0.9 along the separation
+    // vector, then re-resolve props so the push cannot bury it in a pole.
+    // (An ejected driver landing beside his car is only nudged if he
+    // lands right on top of the player; his flee is otherwise untouched.)
+    if (player.pos) {
+      const dx = pos.x - player.pos.x, dz = pos.z - player.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < 0.81) {
+        const d = Math.sqrt(d2);
+        const ux = d > 1e-4 ? dx / d : Math.sin(p.mesh.rotation.y);
+        const uz = d > 1e-4 ? dz / d : Math.cos(p.mesh.rotation.y);
+        pos.x = player.pos.x + ux * 0.9;
+        pos.z = player.pos.z + uz * 0.9;
+        collideProps(pos, 0.35);
+      }
+    }
     p.swing += dt * sp * (running ? 2.6 : 2.2);
     p.idle += dt;
     if (running) posePerson(p.mesh, p.swing, 0.95, 0.95, 0.2, p.idle * 2);

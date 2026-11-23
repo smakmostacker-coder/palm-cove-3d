@@ -37,6 +37,32 @@ function signTex(text, fg, bg) {
   return new THREE.CanvasTexture(c);
 }
 const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+// Facade for every facility shell: the exteriors were plain coloured
+// boxes (mat(color), no texture at all), so at dusk the dark ones — the
+// club above all — read as flat black slabs with a sign floating on
+// them. One shared canvas facade (light neutral wall, a window grid
+// with lit and readable blue-grey unlit panes, a storefront row) is
+// tinted per building by the material colour, exactly the way city.js
+// tints its landmark shells. Painted with a fixed pattern — no rng —
+// so the texture is identical on every load.
+let _shellTex = null;
+function shellTexture() {
+  if (_shellTex) return _shellTex;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#d9dce2'; g.fillRect(0, 0, 128, 256);
+  const cols = 5, rows = 6, ww = 128 / cols, wh = 256 / rows;
+  for (let r = 0; r < rows; r++) for (let col = 0; col < cols; col++) {
+    if (r === rows - 1) g.fillStyle = (col % 2 ? '#8fd8c8' : '#39415a');       // storefront row
+    else g.fillStyle = ((r * cols + col) % 3 === 0) ? '#39415a' : '#ffe9b8';  // 1-in-3 panes unlit
+    g.fillRect(col * ww + 2, r * wh + 3, ww - 4, wh - 6);
+  }
+  g.fillStyle = 'rgba(255,80,150,0.85)'; g.fillRect(0, 256 - wh - 4, 128, 4);
+  _shellTex = new THREE.CanvasTexture(c);
+  return _shellTex;
+}
+const shellMat = (color) => new THREE.MeshLambertMaterial({ map: shellTexture(), color });
 
 export const PRISON = { x: -168, z: -262, hw: 30, hd: 24, gate: { x: -168, z: -236 } };
 // Facility positions come from SITES in config.js: every storefront now
@@ -86,8 +112,10 @@ function clearPlot(x, z, hw, hd) {
 function exterior(scene, x, z, w, h, d, color, label, fg, face = 's') {
   clearPlot(x, z, w / 2, d / 2);
   const dir = face === 'n' ? -1 : 1;
-  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), shellMat(color));
   b.position.set(x, h / 2, z); scene.add(b);
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.4, d + 0.6), mat(0x3d4454));
+  cap.position.set(x, h + 0.2, z); scene.add(cap);
   colliders.push({ x, z, hw: w / 2, hd: d / 2 });
   const faceZ = z + dir * (d / 2);
   const s = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.85, 3.2), new THREE.MeshBasicMaterial({ map: signTex(label, fg, '#14101f'), side: THREE.DoubleSide }));
@@ -174,12 +202,15 @@ export function buildFacilities(scene) {
   PLACES.length = 0;
   for (const f of FACILITIES) PLACES.push({ name: f.name, hint: HINTS[f.id] || '' });
   for (const e of ENTERABLES) if (!PLACES.some((p) => p.name === e.name)) PLACES.push({ name: e.name, hint: HINTS[e.id] || '' });
+  // The prison is neither a shop facility nor an enterable, so it never
+  // reached the map's PLACES list — add it explicitly.
+  PLACES.push({ name: 'PALM COVE CORRECTIONAL', hint: 'The Glades · west marsh, off the x=0 marsh road' });
 }
 
 function buildPrison(scene) {
   const yard = new THREE.Mesh(new THREE.PlaneGeometry(PRISON.hw * 2, PRISON.hd * 2), mat(0x9a8f7a));
   yard.rotation.x = -Math.PI / 2; yard.position.set(PRISON.x, 0.02, PRISON.z); scene.add(yard);
-  const cells = new THREE.Mesh(new THREE.BoxGeometry(34, 9, 10), mat(0x8e9aaf));
+  const cells = new THREE.Mesh(new THREE.BoxGeometry(34, 9, 10), shellMat(0x8e9aaf));
   cells.position.set(PRISON.x, 4.5, PRISON.z - PRISON.hd + 6); scene.add(cells);
   colliders.push({ x: PRISON.x, z: PRISON.z - PRISON.hd + 6, hw: 17, hd: 5 });
   const cs = new THREE.Mesh(new THREE.PlaneGeometry(26, 3.4), new THREE.MeshBasicMaterial({ map: signTex('PALM COVE CORRECTIONAL', '#ffd32a', '#14101f'), side: THREE.DoubleSide }));
@@ -320,7 +351,7 @@ function buildInteriors(scene) {
     // inside this room (club music source); wire it by matching kind/id
     // 'club' in ENTERABLES.
     const s = SITES.club;
-    const door = exterior(scene, s.x, s.z, 18, 9, 12, 0x2a1a3e, 'CLUB NEON PALMS', '#ff5da2', s.face);
+    const door = exterior(scene, s.x, s.z, 18, 9, 12, 0x3d2560, 'CLUB NEON PALMS', '#ff5da2', s.face);
     const room = makeRoom(scene, 24, 16, 0x1c1030, 0x3a2358);
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(11, 8), new THREE.MeshBasicMaterial({ color: 0xff5da2 }));
     floor.rotation.x = -Math.PI / 2; floor.position.set(room.cx, 0.06, room.cz + 1); scene.add(floor);

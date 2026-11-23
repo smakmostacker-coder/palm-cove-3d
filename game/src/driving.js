@@ -13,7 +13,7 @@ import { G } from './state.js';
 import { HANDLING } from './config.js';
 import { collideBuildings, collideProps, groundHeightFor } from './city.js';
 import { parkedCars, trafficCars, ejectDriver } from './traffic.js';
-import { player, updateCamera } from './player.js';
+import { player, updateCamera, tickDragHold, dragHoldActive, wrapAngle } from './player.js';
 import { sfx } from './audio.js';
 import { commitCrime, jackableCop, onCopJacked, jackedCars } from './police.js';
 
@@ -74,7 +74,7 @@ export function carjack(j) {
   c.speed = 0;
   parkedCars.push(c);
   enterCar(c);
-  commitCrime(2, 'Carjacking', { victim: true });
+  commitCrime(2, 'Carjacking'); // reported only if a police unit is within sight range (police.js)
   return c;
 }
 
@@ -93,7 +93,7 @@ export function enterCar(car) {
   G.stats.stolen++;
   G.stats.byClass[car.kind] = (G.stats.byClass[car.kind] || 0) + 1;
   // Stealing an emergency vehicle is reported by the station at once;
-  // an ordinary parked car only raises the stars if somebody sees it.
+  // an ordinary parked car only raises the stars if a police unit sees it.
   commitCrime(car.kind === 'police' || car.kind === 'firetruck' ? 2 : 1, 'Vehicle stolen',
     car.kind === 'police' || car.kind === 'firetruck' ? { instant: true } : undefined);
   sfx.enter();
@@ -168,8 +168,17 @@ export function updateDriving(dt, camera, onCrash) {
     player.mesh.position.set(car.pos.x, 0.55, car.pos.z);
     player.mesh.rotation.y = car.angle;
   }
-  // Chase camera: behind the car, using the same yaw convention as on foot.
-  G.camYaw = Math.PI - car.angle;
+  // Chase camera: behind the car, using the same yaw convention and the
+  // same composition as on foot. The drag hold ticks here too (updatePlayer
+  // never runs while driving, so still exactly one decay per frame); while
+  // a drag hold is active the yaw belongs to orbitCamera() — the player can
+  // orbit manually while driving — and otherwise the yaw EASES behind the
+  // car at the foot-follow rate instead of snapping to it every frame.
+  tickDragHold(dt);
+  if (!dragHoldActive()) {
+    const want = Math.PI - car.angle;
+    G.camYaw += wrapAngle(want - G.camYaw) * Math.min(1, dt * 3.0);
+  }
   updateCamera(dt, camera, car.pos, car.kind === 'moto' ? 8 : 11);
   if (car.health <= 0) { car.health = 0; car.speed = 0; }
 }

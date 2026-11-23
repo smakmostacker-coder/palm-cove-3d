@@ -17,6 +17,16 @@ A stylized **low-poly 3D open-world crime game** in the browser, set on a **long
 - **Carjacking, properly**: occupied vehicles — traffic, parked-with-driver, **even police cars** — can be jacked; the driver is pulled out and reacts like a person whose car was just stolen.
 - **The flyover is solid**: the Palm Flyover deck is a real surface end to end — you drive *on* it, not through it.
 
+## Round 4
+
+- **Only the police report a car-taking**: stealing or jacking a car raises your heat only if a police officer actually sees it (sight range 26 units). Civilians — including the driver you just pulled out of the car — never report it, so an unwitnessed theft stays clean. Taking a police car, emergency vehicles and mission chases are unchanged: those still bring the heat exactly as before.
+- **Driving gets an orbit camera too**: drag to orbit while driving, through the same path as on foot, and the drag direction is corrected everywhere — drag left and the view turns left (touch and mouse, on foot and driving).
+- **Maps drawn from the real placed world**: the minimap and the full map are no longer sketches — they are rendered from the world's actual placed data: the land silhouette, Lake Okeechobee, the marsh channels, every road, every building footprint, and the prison marker. The minimap is also **tappable**: tap it to open the full map (and closing returns you to where you were, game or pause menu).
+- **Officers stop at arm's length**: chasing officers now stop at a 1.4-unit stop distance instead of piling onto you, and pedestrians keep proper separation from each other.
+- **The lightbar, rebuilt**: police lightbars are now a dark base bar carrying distinct red and blue lenses, instead of the old glowing blob.
+- **The black-building fix**: town buildings on the instanced mesh now carry per-instance tints, so no town block renders pitch black — 118 at-risk instances before the fix, 0 after.
+- **Swimming**: walk into the sea and you swim — 4.5 units/s, 6 with sprint — with the world bound set 240 units offshore, so you can swim out, turn around, and wade back onto the sand.
+
 ## Story
 
 Courier **Vera Solano** — or her partner **Dario "Dax" Vega**, your choice at New Game — owes a debt to fixer **Lucia Marrero** in the coastal city of Palm Cove. A New Game **wakes the chosen lead up in their own bed** at home in Coral Heights; Lucia's first message and the first mission marker only arrive once you step outside. Work the debt off across four story missions, and *how* you work decides the ending: debtors spared or taken out, money earned, busts on your record and side work all feed **six branching endings** — from *Clean Getaway* to *Kingpin of the Cove* to *Queen of the Ashes*. The finale is replayable from the pause menu, and unlocked endings are recorded in your save and stats.

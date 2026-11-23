@@ -15,16 +15,29 @@
 // is not a statue either: an idle phase keeps the chest breathing, the head
 // drifting and the weight shifting.
 //
+// Swimming: the state is derived per frame from the position — past the
+// shoreline (city.js isLand) the same input path swims instead of walks,
+// slower, floating at the surface with a stroke pose, bounded only by
+// city.js clampSea far offshore. Stepping back onto land resumes walking
+// in the same movement; there is no mode switch anywhere else.
+//
 // Camera (the POV fix): dragging the mouse orbits freely at any time and
 // takes priority; while the lead moves and the mouse has been left alone for
 // a moment, the camera EASES around behind the direction of travel — an
 // angular lerp, never a snap — so turning left or right brings the view
-// round with you. Driving keeps its own chase camera in driving.js.
+// round with you. Driving (driving.js) uses the same composition: the
+// chase yaw eases behind the car at the same rate, and the same dragHold
+// suppresses that ease while the player orbits manually.
 import { G } from './state.js';
 import { TUNING, SPAWN } from './config.js';
-import { collideBuildings, groundHeightFor, makeProtagonist, posePerson } from './city.js';
+import { collideBuildings, groundHeightFor, isLand, makeProtagonist, posePerson } from './city.js';
 
-export const player = { mesh: null, pos: null, angle: 0, swing: 0, speedNow: 0, sprinting: false, idle: 0, surfMode: null, surfY: 0 };
+export const player = { mesh: null, pos: null, angle: 0, swing: 0, speedNow: 0, sprinting: false, idle: 0, surfMode: null, surfY: 0, swimming: false, swimBlend: 0 };
+// Swimming: slower than a run, with a small sprint boost. The mesh floats
+// with the ocean surface (-0.35) cutting mid-torso: the rig stands ~1.8
+// tall from a feet origin and rides at y=0.3 on land, so the swim height
+// is -0.85, plus a gentle bob.
+const SWIM_SPEED = 4.5, SWIM_SPRINT_SPEED = 6, SWIM_Y = -0.85, SWIM_BOB_AMP = 0.06;
 let playerScene = null;
 let dragHold = 0; // seconds of auto-follow suppression left after a mouse drag
 
@@ -52,13 +65,31 @@ export function setCharacter(who) {
 
 // Called by the mouse handler in main.js whenever the player drags: orbit
 // immediately, and hold off the auto-follow briefly so the two never fight.
+// Sign convention (player's terms): dragging LEFT turns the view LEFT and
+// dragging RIGHT turns it RIGHT. The view direction is (sin camYaw,
+// -cos camYaw), so a larger camYaw turns the view to its right — hence
+// camYaw INCREASES with a rightward drag (dx > 0) and decreases with a
+// leftward one. (Round 3 had this mirrored; flipped in round 4.)
 export function orbitCamera(dx, dy) {
-  G.camYaw -= dx * 0.0042;
+  G.camYaw += dx * 0.0042;
   G.camPitch = Math.max(0.05, Math.min(1.1, G.camPitch + dy * 0.003));
   dragHold = 1.4;
 }
 
-function wrapAngle(a) {
+// Decay the post-drag auto-follow suppression. Exactly one call per frame:
+// updatePlayer() on foot, updateDriving() (driving.js) while driving — the
+// two never run in the same frame, so there is no double decay.
+export function tickDragHold(dt) {
+  if (dragHold > 0) dragHold -= dt;
+}
+
+// True while a recent drag should keep the auto-follow / chase ease from
+// fighting the player's manual orbit (on foot and while driving alike).
+export function dragHoldActive() {
+  return dragHold > 0;
+}
+
+export function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
@@ -89,9 +120,17 @@ export function updatePlayer(dt, camera) {
   const wantSprint = k['ShiftLeft'] || k['ShiftRight'] || G.sprintTouch;
   const moving = mag > 0;
   player.sprinting = !!(moving && wantSprint);
-  const speed = (player.sprinting ? TUNING.sprintSpeed : TUNING.walkSpeed) * mag;
+  // Swimming is DERIVED from the position every frame, never latched:
+  // over water (city.js isLand) means swimming, over land means walking,
+  // so entering/leaving the sea needs no event and a save made mid-swim
+  // self-heals on load. Re-derived after the move below as well.
+  player.swimming = !isLand(player.pos.x, player.pos.z);
+  G.swimming = player.swimming;
+  const speed = (player.swimming
+    ? (player.sprinting ? SWIM_SPRINT_SPEED : SWIM_SPEED)
+    : (player.sprinting ? TUNING.sprintSpeed : TUNING.walkSpeed)) * mag;
   player.speedNow = moving ? speed : 0;
-  if (dragHold > 0) dragHold -= dt;
+  tickDragHold(dt);
 
   if (moving) {
     const len = Math.hypot(ix, iz); ix /= len; iz /= len;
@@ -114,10 +153,16 @@ export function updatePlayer(dt, camera) {
     for (let h = 0; h < hops; h++) {
       player.pos.x += fx * speed * hdt;
       player.pos.z += fz * speed * hdt;
-      collideBuildings(player.pos, 0.7);
+      // Per-hop region test: a hop that lands in the sea collides WITHOUT
+      // the land clamp (clampSea bounds it offshore instead), so walking
+      // off a beach starts swimming and swimming back onto the shallows
+      // exits in the same continuous movement — nothing fights either
+      // crossing. Building/prop collision applies in both modes.
+      collideBuildings(player.pos, 0.7, !isLand(player.pos.x, player.pos.z) ? { sea: true } : null);
     }
-    // Stride phase: the sprint cycle turns over far faster than the walk.
-    player.swing += dt * speed * (player.sprinting ? 1.95 : 1.5);
+    // Stride phase: the sprint cycle turns over far faster than the walk;
+    // the swim stroke cycles at ~1 Hz at swim speed.
+    player.swing += dt * speed * (player.swimming ? 1.4 : player.sprinting ? 1.95 : 1.5);
     player.idle = 0;
     // Auto-follow: ease the camera behind the heading while moving.
     if (dragHold <= 0 && !G.driving) {
@@ -127,12 +172,34 @@ export function updatePlayer(dt, camera) {
   } else {
     player.idle += dt;
   }
-  collideBuildings(player.pos, 0.7);
-  player.mesh.position.y = 0.3 + groundHeightFor(player, player.pos.x, player.pos.z, null);
+  player.swimming = !isLand(player.pos.x, player.pos.z);
+  G.swimming = player.swimming;
+  collideBuildings(player.pos, 0.7, player.swimming ? { sea: true } : null);
+  // Vertical: on land the mesh rides the ground exactly as before. While
+  // swimming it floats at SWIM_Y plus a gentle bob. swimBlend eases over
+  // ~0.35 s between the two heights, so entering and leaving the water
+  // never snaps.
+  const landY = 0.3 + groundHeightFor(player, player.pos.x, player.pos.z, null);
+  const blendStep = dt / 0.35;
+  if (player.swimming) player.swimBlend = Math.min(1, player.swimBlend + blendStep);
+  else player.swimBlend = Math.max(0, player.swimBlend - blendStep);
+  if (player.swimBlend <= 0) player.mesh.position.y = landY;
+  else {
+    const b = player.swimBlend, s = b * b * (3 - 2 * b);
+    const swimY = SWIM_Y + Math.sin(G.time * 2.1) * SWIM_BOB_AMP;
+    player.mesh.position.y = landY + (swimY - landY) * s;
+  }
   player.mesh.rotation.y = player.angle;
 
-  // Pose: walk, run and idle are three distinct settings of the same rig.
-  if (moving && player.sprinting) {
+  // Pose: walk, run, swim and idle are distinct settings of the same rig.
+  if (player.swimming && moving) {
+    // Freestyle-ish stroke: big arm cycle, small flutter kick, body
+    // pitched forward so it reads prone at the surface.
+    posePerson(player.mesh, player.swing, 0.25, 1.2, 0.45, G.time * 1.5);
+  } else if (player.swimming) {
+    // Treading water: slow small arm cycle, gentle flutter, slight lean.
+    posePerson(player.mesh, G.time * 1.8, 0.18, 0.35, 0.3, G.time * 2.2);
+  } else if (moving && player.sprinting) {
     posePerson(player.mesh, player.swing, 1.02, 1.05, 0.24, player.idle);
   } else if (moving) {
     posePerson(player.mesh, player.swing, 0.62, 0.58, 0.07, player.idle);
@@ -158,7 +225,7 @@ export function updateCamera(dt, camera, target, dist) {
 export function strideState() {
   const u = player.mesh ? player.mesh.userData : {};
   return {
-    phase: player.swing, speedNow: player.speedNow, sprinting: player.sprinting,
+    phase: player.swing, speedNow: player.speedNow, sprinting: player.sprinting, swimming: player.swimming,
     legL: u.legL ? u.legL.rotation.x : 0, legR: u.legR ? u.legR.rotation.x : 0,
     armL: u.armL ? u.armL.rotation.x : 0, camYaw: G.camYaw, angle: player.angle,
   };

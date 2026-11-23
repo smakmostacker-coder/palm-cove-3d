@@ -200,8 +200,31 @@ $('btnStatsBack').onclick = closeStats;
 $('btnEndContinue').onclick = () => { showOverlay(null); G.mode = 'playing'; };
 $('btnEndReplay').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
 $('btnReplayFinale').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
-$('btnMap').onclick = () => { showOverlay('map'); drawFullMap(); };
-$('btnMapClose').onclick = () => { if (G.mode === 'paused') showOverlay('pause'); else showOverlay(null); };
+// ---- Full map: two ways in, and closing returns to wherever it opened from -
+// From the pause menu (mapFrom 'pause') closing goes back to the pause
+// overlay with the mode still 'paused'; from a tap on the HUD minimap
+// (mapFrom 'game') the world freezes (mode 'paused') while the map is up
+// and closing drops straight back into gameplay.
+let mapFrom = 'pause';
+function openMap(from) {
+  mapFrom = from;
+  if (from === 'game') G.mode = 'paused';
+  showOverlay('map');
+  drawFullMap();
+}
+function closeMap() {
+  if (mapFrom === 'game') { showOverlay(null); G.mode = 'playing'; }
+  else showOverlay('pause');
+}
+$('btnMap').onclick = () => openMap('pause');
+$('btnMapClose').onclick = closeMap;
+// Tapping the HUD minimap (and only the minimap — it is a DOM canvas above
+// the WebGL canvas, so taps on it never reach the touch-orbit handler)
+// opens the full map straight from gameplay.
+$('minimap').addEventListener('click', () => {
+  if (G.mode !== 'playing') return;
+  openMap('game');
+});
 
 // ---- Settings panel ---------------------------------------------------------
 let settingsFrom = 'title';
@@ -451,6 +474,8 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'KeyK') cycleRadio();
     else if (e.code === 'KeyV' && G.weapon === 'Sniper') G.scoped = !G.scoped;
     else if (/^Digit[1-5]$/.test(e.code)) doSelectSlot(parseInt(e.code.slice(5), 10) - 1);
+  } else if (overlayNow === 'map' && e.code === 'Escape') {
+    closeMap();
   } else if (G.mode === 'paused' && (e.code === 'Escape' || e.code === 'KeyP')) {
     G.mode = 'playing';
     showOverlay(null);

@@ -31,6 +31,7 @@ export const G = {
   camPitch: 0.32,
   driving: null,
   onFoot: true,
+  swimming: false, // derived per frame by player.js from the position (never latched in a save)
   stats: { stolen: 0, drivenKm: 0, missions: 0, side: 0, punches: 0, shotsFired: 0, byClass: {} },
   // Story tracking for the branching endings: mercy vs. ruthlessness, money
   // earned honestly, times busted/wasted, and the finale choices in order.

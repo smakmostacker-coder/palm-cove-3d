@@ -189,8 +189,14 @@ export function updateFire(dt, playerPos) {
     if (truck) {
       truck.mesh.position.copy(truck.pos);
       truck.mesh.rotation.y = truck.angle;
-      if (truck.mesh.userData.lightbar) {
-        truck.mesh.userData.lightbar.material.color.setHex(Math.floor(G.time * 6) % 2 ? 0xff3838 : 0xffd32a);
+      const flb = truck.mesh.userData.lightbar;
+      if (flb && flb.userData.lenses) {
+        // Two-lens bar: red and warm-white halves flash in alternation.
+        const ph = Math.floor(G.time * 6) % 2;
+        flb.userData.lenses[0].material.color.setHex(ph ? 0xff3838 : 0x571414);
+        flb.userData.lenses[1].material.color.setHex(ph ? 0x6b5a2a : 0xffd32a);
+      } else if (flb) {
+        flb.material.color.setHex(Math.floor(G.time * 6) % 2 ? 0xff3838 : 0xffd32a);
       }
       for (const w of truck.mesh.userData.wheels) w.rotation.x += dt * 6;
     }

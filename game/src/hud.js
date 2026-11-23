@@ -7,10 +7,10 @@
 // pause-menu FULL MAP draws the entire Florida silhouette: city at the
 // southern tip, marsh, the long spine, the panhandle, the Keys arc.
 import { G } from './state.js';
-import { ROADS, WORLD, KEYS } from './config.js';
-import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, DIAG_SEG, PROM_POINTS } from './city.js';
+import { ROADS, WORLD, KEYS, MARSH } from './config.js';
+import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, DIAG_SEG, PROM_POINTS, landHalfWidthAt, buildingRecords, MARSH_CHANNELS, MARSH_ROAD, FLYOVER_SEG, LAKE_OKEECHOBEE } from './city.js'; // PANHANDLE_Z: coastPoly's breakpoint list
 import { ITEM_DEFS } from './inventory.js';
-import { HOME, FACILITIES, ENTERABLES, PLACES } from './facilities.js';
+import { HOME, FACILITIES, ENTERABLES, PLACES, PRISON } from './facilities.js';
 import { settings } from './settings.js';
 
 const el = {};
@@ -94,6 +94,34 @@ export function updateHud(playerPos, targetPos, copPositions) {
   drawMinimap(playerPos, targetPos, copPositions);
 }
 
+// ---- Static map geometry, precomputed once at module load ---------------
+// The landmass is NOT hand-drawn rectangles any more: each tone band's
+// coastline polygon is sampled from city.js's landHalfWidthAt(z) — the same
+// half-width function clampWorld uses — so the map's coast is the world's
+// coast: panhandle (half 690) north of PANHANDLE_Z, the narrow spine (188),
+// and the city/marsh shelf (232) at the south. Bands split where the land
+// use changes: peninsula green, marsh green-brown (config MARSH), city
+// green. The minimap redraws every frame, so this sampling happens here,
+// never inside drawFloridaMap.
+function coastPoly(z0, z1) {
+  // Sample every 25 units plus the half-width function's exact breakpoints
+  // (the city-shelf edge and PANHANDLE_Z), so the width steps land where
+  // the world puts them instead of up to a sample away.
+  const zs = new Set([z0, z1]);
+  for (let z = z1; z >= z0; z -= 25) zs.add(z);
+  for (const b of [-210, PANHANDLE_Z]) if (b > z0 && b < z1) zs.add(b);
+  const desc = [...zs].sort((a, b2) => b2 - a), asc = [...desc].reverse();
+  const pts = [];
+  for (const z of desc) pts.push({ x: landHalfWidthAt(z), z });
+  for (const z of asc) pts.push({ x: -landHalfWidthAt(z), z });
+  return pts;
+}
+const LAND_BANDS = [
+  { poly: coastPoly(NORTH_END, MARSH.z0), fill: '#55803f' },   // spine + panhandle (buildPeninsula's land tone)
+  { poly: coastPoly(MARSH.z0, MARSH.z1), fill: '#5c6b35' },    // Everglades marsh
+  { poly: coastPoly(MARSH.z1, WORLD + 20), fill: '#4c8a4f' },  // city plateau
+];
+
 // Draw the world into a canvas window: view = {cx, cz, halfW, halfH} in
 // world units. Land, water, roads, the highway, the Keys, HOME, targets,
 // police and the player arrow — clipped to the window, so the same code
@@ -104,19 +132,50 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
   const pz = (z) => (z - (v.cz - v.halfH)) * (S / (v.halfH * 2));
   const sx = W2 / (v.halfW * 2), sz = S / (v.halfH * 2);
   c.fillStyle = '#0e6e8c'; c.fillRect(0, 0, W2, S); // ocean everywhere first
-  c.fillStyle = '#5c6b35';
-  c.fillRect(px(-212), pz(-436), 424 * sx, 236 * sz); // marsh
-  c.fillStyle = '#4c8a4f';
-  c.fillRect(px(-205), pz(-205), 410 * sx, 415 * sz); // city plateau
-  c.fillRect(px(-188), pz(PANHANDLE_Z), 376 * sx, (-436 - PANHANDLE_Z) * sz); // spine land
-  c.fillRect(px(-690), pz(NORTH_END), 1380 * sx, (PANHANDLE_Z - NORTH_END) * sz); // panhandle
+  // Land: the precomputed coastline polygons (sampled from landHalfWidthAt),
+  // filled per land-use band and edged in sand, so a window near any coast
+  // shows the real shoreline instead of a green square running off-canvas.
+  for (const band of LAND_BANDS) {
+    c.beginPath();
+    band.poly.forEach((p, k) => { if (k === 0) c.moveTo(px(p.x), pz(p.z)); else c.lineTo(px(p.x), pz(p.z)); });
+    c.closePath();
+    c.fillStyle = band.fill; c.fill();
+    c.strokeStyle = '#f2d492'; c.lineWidth = Math.max(1, 2.5 * sx); c.stroke();
+  }
+  // City beaches: the actual sand planes buildCity lays at ±(WORLD+16),
+  // 30 wide, running the plateau's full depth.
   c.fillStyle = '#f2d492';
-  c.fillRect(px(-232), pz(-205), 27 * sx, 415 * sz);
-  c.fillRect(px(205), pz(-205), 27 * sx, 415 * sz); // city beaches
+  c.fillRect(px(-(WORLD + 31)), pz(-220), 30 * sx, 440 * sz);
+  c.fillRect(px(WORLD + 1), pz(-220), 30 * sx, 440 * sz);
+  // Lake Okeechobee: the water ellipse buildPeninsula bites into the spine.
+  c.fillStyle = '#2e6e8c';
+  c.beginPath(); c.ellipse(px(LAKE_OKEECHOBEE.x), pz(LAKE_OKEECHOBEE.z), LAKE_OKEECHOBEE.rx * sx, LAKE_OKEECHOBEE.rz * sz, 0, 0, 7); c.fill();
+  c.strokeStyle = '#f2d492'; c.lineWidth = Math.max(1, 2 * sx); c.stroke();
+  // Marsh water channels: the exact placements buildCity rendered
+  // (MARSH_CHANNELS — same seeded RNG stream, recorded at build time).
+  // Each channel is a 230-long plane rotated `rot` about its centre; draw
+  // it as a thick segment along that rotated axis.
+  c.strokeStyle = '#2e4d3f';
+  c.lineCap = 'butt';
+  for (const ch of MARSH_CHANNELS) {
+    const dx = Math.sin(ch.rot) * (ch.len / 2), dz = Math.cos(ch.rot) * (ch.len / 2);
+    c.lineWidth = Math.max(1.5, ch.w * sx);
+    c.beginPath(); c.moveTo(px(ch.x - dx), pz(ch.z - dz)); c.lineTo(px(ch.x + dx), pz(ch.z + dz)); c.stroke();
+  }
   c.strokeStyle = '#39404d';
   c.lineWidth = Math.max(2, 12 * sx);
   c.beginPath(); c.moveTo(px(0), pz(200)); c.lineTo(px(0), pz(436)); c.stroke(); // causeway
-  c.beginPath(); c.moveTo(px(0), pz(-180)); c.lineTo(px(0), pz(NORTH_END)); c.stroke(); // highway
+  c.beginPath(); c.moveTo(px(0), pz(-180)); c.lineTo(px(0), pz(NORTH_END)); c.stroke(); // highway (incl. the marsh road span)
+  // The Glades' only other placed geometry: the prison yard itself (sand
+  // plane, PRISON hw/hd from facilities.js) — the world builds no road out
+  // to it, so the yard and the x=0 marsh road are what the map can show.
+  c.fillStyle = '#9a8f7a';
+  c.fillRect(px(PRISON.x - PRISON.hw), pz(PRISON.z - PRISON.hd), PRISON.hw * 2 * sx, PRISON.hd * 2 * sz);
+  // The marsh road plane itself (MARSH_ROAD from city.js), at its true
+  // ROAD_W width — the segment of the x=0 line serving the Glades/dock.
+  c.strokeStyle = '#39404d';
+  c.lineWidth = Math.max(2, MARSH_ROAD.w * sx);
+  c.beginPath(); c.moveTo(px(MARSH_ROAD.x), pz(MARSH_ROAD.z - MARSH_ROAD.len / 2)); c.lineTo(px(MARSH_ROAD.x), pz(MARSH_ROAD.z + MARSH_ROAD.len / 2)); c.stroke();
   c.lineWidth = Math.max(1, 7 * sx);
   c.beginPath();
   for (const r of ROADS) {
@@ -124,6 +183,11 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
     c.moveTo(px(-200), pz(r)); c.lineTo(px(200), pz(r));
   }
   c.stroke();
+  // The flyover: the elevated x=75 deck, brighter and thicker than the
+  // street grid so the grade separation reads on the map.
+  c.strokeStyle = '#9aa7bd';
+  c.lineWidth = Math.max(2, 10 * sx);
+  c.beginPath(); c.moveTo(px(FLYOVER_SEG.x), pz(FLYOVER_SEG.z0)); c.lineTo(px(FLYOVER_SEG.x), pz(FLYOVER_SEG.z1)); c.stroke();
   // The reworked south: mid streets, the diagonal avenue and the coastal
   // promenade — drawn thinner than the ROADS so blocks read as blocks.
   c.strokeStyle = '#39404d';
@@ -139,6 +203,17 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
   c.beginPath();
   PROM_POINTS.forEach((p, k) => { if (k === 0) c.moveTo(px(p.x), pz(p.z)); else c.lineTo(px(p.x), pz(p.z)); });
   c.stroke();
+  // Building footprints at local scale: city.js's buildingRecords — every
+  // placed building's own {x, z, hw, hd} — in a muted tint, so city blocks
+  // read as blocks instead of bare green. Local windows only (the full map
+  // would be a solid smear), culled to the window.
+  if (v.halfW <= 80) {
+    c.fillStyle = 'rgba(24,38,30,0.55)';
+    for (const b of buildingRecords) {
+      if (Math.abs(b.x - v.cx) > v.halfW + b.hw || Math.abs(b.z - v.cz) > v.halfH + b.hd) continue;
+      c.fillRect(px(b.x - b.hw), pz(b.z - b.hd), b.hw * 2 * sx, b.hd * 2 * sz);
+    }
+  }
   // Door markers: every enterable building and shop facility gets a cyan
   // door square at its entrance point, lettered on the local minimap, so
   // the gun shop / pharmacy / club can actually be found.
@@ -169,6 +244,17 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
     c.fillStyle = '#14161c';
     c.font = '900 7px system-ui';
     c.fillText('H', px(HOME.x) - 2.5, pz(HOME.z) + 2.5);
+  }
+  // PRISON marker: a slate lettered square at the gate, on both maps —
+  // the prison is in neither ENTERABLES nor FACILITIES, so the door-marker
+  // pass above never marked it and the Glades read as empty.
+  {
+    c.fillStyle = '#57606f';
+    c.fillRect(px(PRISON.gate.x) - 4, pz(PRISON.gate.z) - 4, 8, 8);
+    c.strokeStyle = '#14161c'; c.lineWidth = 1; c.strokeRect(px(PRISON.gate.x) - 4, pz(PRISON.gate.z) - 4, 8, 8);
+    c.fillStyle = '#ffffff';
+    c.font = '900 7px system-ui';
+    c.fillText('P', px(PRISON.gate.x) - 2.2, pz(PRISON.gate.z) + 2.5);
   }
   if (targetPos) {
     c.fillStyle = '#ffd32a';

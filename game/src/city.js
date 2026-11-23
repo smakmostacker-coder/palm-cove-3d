@@ -58,7 +58,11 @@ let roomColliders = null;
 export function setRoomColliders(list) { roomColliders = list; }
 export function inRoom() { return !!roomColliders; }
 
-export function collideBuildings(pos, radius) {
+// opts.sea (player swimming only): building/prop collision still applies,
+// but the LAND clamp is replaced by clampSea — the swimmer is bounded by
+// the offshore line, not the shoreline. Every other caller passes no opts
+// and gets the land clamp exactly as before.
+export function collideBuildings(pos, radius, opts) {
   if (roomColliders) {
     for (const c of roomColliders) {
       const dx = pos.x - c.x, dz = pos.z - c.z;
@@ -81,7 +85,8 @@ export function collideBuildings(pos, radius) {
     }
   }
   const prop = collideProps(pos, radius);
-  clampWorld(pos);
+  if (opts && opts.sea) clampSea(pos);
+  else clampWorld(pos);
   return { building, prop };
 }
 
@@ -115,6 +120,19 @@ export const LANDMARKS = [
   { name: 'Panhandle Gate', x: 0, z: -3980, r: 260 },
   { name: 'Tallahassee Palms — Far Shore', x: 0, z: -4240, r: 160 },
 ];
+// Map data shared with hud.js's drawFloridaMap, exported so the maps draw
+// the placed world itself rather than a hand-drawn approximation of it.
+// Lake Okeechobee: the buildPeninsula disc (radius 95 scaled 1.25 × 0.8)
+// expressed as an ellipse. MARSH_ROAD: the ROAD_W-wide plane buildCity lays
+// across the marsh at (0, -262). FLYOVER_SEG: the elevated x=75 deck span
+// (flyoverH's non-zero range). MARSH_CHANNELS is filled by buildCity from
+// the very placements it renders — width, rotation and centre of each
+// marsh water channel, in draw order — so map and world always agree,
+// whatever the world seed.
+export const LAKE_OKEECHOBEE = { x: 85, z: -780, rx: 95 * 1.25, rz: 95 * 0.8 };
+export const MARSH_ROAD = { x: 0, z: -262, w: ROAD_W, len: 130 };
+export const FLYOVER_SEG = { x: 75, z0: 30, z1: 120 };
+export const MARSH_CHANNELS = [];
 export function landmarkAt(x, z) {
   for (const l of LANDMARKS) if (Math.hypot(x - l.x, z - l.z) < l.r) return l.name;
   return '';
@@ -223,20 +241,67 @@ export function isRoad(x, z) {
 // World bounds follow the land: city plateau, Keys corridor, marsh, spine
 // and panhandle. Every edge is a shoreline — you stop where the land stops,
 // and the sea is what is past it.
+//
+// The one exception is the swimming player (player.js): the sea past the
+// shoreline is swimmable, bounded only by clampSea below — a generous line
+// out in open water, so sand → shallow → deep is one continuous space.
+
+// The Keys isle (expanded by `pad`) whose ellipse contains (x, z), with the
+// ellipse's half-width in x at that z — the exact test clampWorld applies.
+function keysIsleAt(x, z, pad) {
+  for (const k of KEYS) {
+    const dz = (z - k.z) / (k.rz + pad);
+    if (Math.abs(dz) < 1) {
+      const maxX = (k.rx + pad) * Math.sqrt(1 - dz * dz);
+      if (Math.abs(x) <= maxX) return { k, maxX };
+    }
+  }
+  return null;
+}
+
+// True iff (x, z) is inside the land region clampWorld enforces — i.e.
+// clampWorld would leave the point untouched. Anything else is sea. This
+// is the single definition of "water" the swimmer derives its state from
+// every frame, so a save made mid-swim self-heals on load.
+export function isLand(x, z) {
+  if (z > WORLD + 10) {
+    if (z > 442) return false;
+    if (keysIsleAt(x, z, 5)) return true;
+    return Math.abs(x) <= CAUSEWAY.halfW + 3;
+  }
+  return z >= NORTH_END && Math.abs(x) <= landHalfWidthAt(z);
+}
+
+// How far past the shoreline the swimmable sea extends, in every direction.
+export const OFFSHORE = 240;
+
+// The swimmer's world bound: the SAME land region as clampWorld, expanded
+// by `offshore` units in every direction (plateau/spine/panhandle half-
+// width + offshore, z range extended at both ends, Keys ellipses grown by
+// offshore, causeway corridor widened by offshore). It only ever clamps to
+// that outer bound — the position slides along it, nothing is visible
+// there and there is no pop.
+export function clampSea(pos, offshore = OFFSHORE) {
+  if (pos.z > WORLD + 10 + offshore) {
+    const hit = keysIsleAt(pos.x, pos.z, 5 + offshore);
+    if (hit) {
+      pos.x = Math.max(-hit.maxX, Math.min(hit.maxX, pos.x));
+    } else if (Math.abs(pos.x) <= CAUSEWAY.halfW + 3 + offshore) {
+      pos.x = Math.max(-CAUSEWAY.halfW - 3 - offshore, Math.min(CAUSEWAY.halfW + 3 + offshore, pos.x));
+    } else pos.z = WORLD + 10 + offshore;
+    pos.z = Math.min(pos.z, 442 + offshore);
+    return;
+  }
+  const half = landHalfWidthAt(pos.z) + offshore;
+  pos.x = Math.max(-half, Math.min(half, pos.x));
+  pos.z = Math.max(NORTH_END - offshore, Math.min(WORLD + 10 + offshore, pos.z));
+}
+
 export function clampWorld(pos) {
   if (pos.z > WORLD + 10) {
-    let isle = null;
-    for (const k of KEYS) {
-      const dz = (pos.z - k.z) / (k.rz + 5);
-      if (Math.abs(dz) < 1) {
-        const maxX = (k.rx + 5) * Math.sqrt(1 - dz * dz);
-        if (Math.abs(pos.x) <= maxX) isle = k;
-      }
-    }
-    if (isle) {
-      const dz = (pos.z - isle.z) / (isle.rz + 5);
-      const maxX = (isle.rx + 5) * Math.sqrt(Math.max(0, 1 - dz * dz));
-      pos.x = Math.max(-maxX, Math.min(maxX, pos.x));
+    const hit = keysIsleAt(pos.x, pos.z, 5);
+    if (hit) {
+      pos.x = Math.max(-hit.maxX, Math.min(hit.maxX, pos.x));
     } else if (Math.abs(pos.x) <= CAUSEWAY.halfW + 3) {
       pos.x = Math.max(-CAUSEWAY.halfW - 3, Math.min(CAUSEWAY.halfW + 3, pos.x));
     } else pos.z = WORLD + 10;
@@ -268,8 +333,11 @@ function facadeTex(rng, wall, litRatio, cols, rows, storefront) {
     const wh = h / rows, ww = w / cols;
     for (let r = 0; r < rows; r++) for (let col = 0; col < cols; col++) {
       const lit = rng() < litRatio;
-      g.fillStyle = lit ? (rng() < 0.25 ? '#ffd9a0' : '#ffe9b8') : '#232838';
-      if (storefront && r === rows - 1) g.fillStyle = rng() < 0.7 ? '#7ef0d4' : '#232838';
+      // Unlit windows are a readable blue-grey, never near-black: at dusk
+      // a #232838 window multiplied by hemisphere-only shade lands on
+      // (0,0,0), and on a dark-walled style the whole face goes with it.
+      g.fillStyle = lit ? (rng() < 0.25 ? '#ffd9a0' : '#ffe9b8') : '#2f3648';
+      if (storefront && r === rows - 1) g.fillStyle = rng() < 0.7 ? '#7ef0d4' : '#2f3648';
       g.fillRect(col * ww + 2, r * wh + 3, ww - 4, wh - 6);
     }
     if (storefront) { g.fillStyle = 'rgba(255,80,150,0.85)'; g.fillRect(0, h - wh - 4, w, 4); }
@@ -344,10 +412,13 @@ export function buildCity(scene, seed) {
   const marsh = new THREE.Mesh(new THREE.PlaneGeometry(440, 240), mat(0x5c6b35));
   marsh.rotation.x = -Math.PI / 2; marsh.position.set(0, -0.04, -322); scene.add(marsh);
   const chanMat = mat(0x2e4d3f);
+  MARSH_CHANNELS.length = 0;
   for (let i = 0; i < 7; i++) {
-    const ch = new THREE.Mesh(new THREE.PlaneGeometry(8 + rng() * 14, 230), chanMat);
-    ch.rotation.x = -Math.PI / 2; ch.rotation.z = (rng() - 0.5) * 0.22;
-    ch.position.set(-190 + rng() * 380, 0.01, -322); scene.add(ch);
+    const w = 8 + rng() * 14, rot = (rng() - 0.5) * 0.22, x = -190 + rng() * 380;
+    const ch = new THREE.Mesh(new THREE.PlaneGeometry(w, 230), chanMat);
+    ch.rotation.x = -Math.PI / 2; ch.rotation.z = rot;
+    ch.position.set(x, 0.01, -322); scene.add(ch);
+    MARSH_CHANNELS.push({ x, z: -322, w, len: 230, rot });
   }
   buildPeninsula(scene, rng);
 
@@ -365,8 +436,8 @@ export function buildCity(scene, seed) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, CAUSEWAY.z1 - CAUSEWAY.z0 + 30), railMat);
     rail.position.set(CAUSEWAY.x + sx * (CAUSEWAY.halfW + 0.4), 0.45, (CAUSEWAY.z0 + CAUSEWAY.z1) / 2); scene.add(rail);
   }
-  const mr = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W, 130), mat(0x39404d));
-  mr.rotation.x = -Math.PI / 2; mr.position.set(0, 0.03, -262); scene.add(mr);
+  const mr = new THREE.Mesh(new THREE.PlaneGeometry(MARSH_ROAD.w, MARSH_ROAD.len), mat(0x39404d));
+  mr.rotation.x = -Math.PI / 2; mr.position.set(MARSH_ROAD.x, 0.03, MARSH_ROAD.z); scene.add(mr);
 
   // City road grid with lane dashes.
   const roadMat = mat(0x39404d), dashMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
@@ -530,7 +601,7 @@ export function buildCity(scene, seed) {
     fs.position.set(75, 8.6, 92); scene.add(fs);
     const uSegs = []; for (let z = -118; z < -32; z += 8) uSegs.push(z + 4);
     const uDeck = new THREE.InstancedMesh(new THREE.BoxGeometry(13, 0.7, 8.6), deckMat, uSegs.length);
-    const uWall = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 1, 8.6), mat(0x6b705c), uSegs.length * 2);
+    const uWall = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 1, 8.6), mat(0x8a9077), uSegs.length * 2);
     const uStrip = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 0.3, 8.6), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }), uSegs.length * 2);
     uSegs.forEach((zc, k) => {
       const d = underpassD(zc), wallH = Math.max(0.6, -d + 1.2);
@@ -551,12 +622,20 @@ export function buildCity(scene, seed) {
   // downtown glass, Marina pastel, Old Town brick, Docks warehouses,
   // Coral Heights houses with pitched roofs.
   const styles = {
-    downtown: { tex: facadeTex(rng, '#3a4460', 0.62, 8, 14, true), tint: [0xbfd4ff, 0x9fb6e8, 0xd8c8ff] },
+    downtown: { tex: facadeTex(rng, '#4a5878', 0.62, 8, 14, true), tint: [0xbfd4ff, 0x9fb6e8, 0xd8c8ff] },
     pastel: { tex: facadeTex(rng, '#e8b4b8', 0.5, 6, 8, true), tint: [0xffc8dd, 0xfec8a0, 0xa0e8dd, 0xfff3b0] },
     brick: { tex: facadeTex(rng, '#9c5a44', 0.42, 6, 7, true), tint: [0xe8a080, 0xd98c68, 0xc9a06a] },
-    ware: { tex: facadeTex(rng, '#6b705c', 0.22, 5, 3, false), tint: [0xa8b09a, 0x8f9a94, 0xb0a696] },
+    // Ware wall lightened (#6b705c -> #8a9077, colour only — same rng
+    // draw count): with half its texels unlit windows, the old olive wall
+    // averaged to a black slab under dusk shade.
+    ware: { tex: facadeTex(rng, '#8a9077', 0.22, 5, 3, false), tint: [0xa8b09a, 0x8f9a94, 0xb0a696] },
     house: { tex: facadeTex(rng, '#e6ddcb', 0.55, 4, 2, false), tint: [0xffffff, 0xffe8c8, 0xd8f0d0, 0xffd8d8] },
   };
+  // Neutral facade for the signed landmark shells (police / garage / fire
+  // station): they were plain coloured boxes with no facade at all. Drawn
+  // from its OWN rng so the shared stream — and every placement it feeds —
+  // is untouched; the building's colour tints it per landmark.
+  const shellTex = facadeTex(makeRng(777), '#cfd4dc', 0.5, 5, 6, true);
   const byStyle = { downtown: [], pastel: [], brick: [], ware: [], house: [] };
   const capList = [];    // parapet caps: a dark trim box on every flat roof
   const awningList = []; // shop canopies {x, z, w, d, dir} on dressed rows
@@ -738,7 +817,7 @@ export function buildCity(scene, seed) {
   // Parapet caps and shop awnings: the trim that keeps southern frontage
   // from reading as bare boxes — one instanced mesh each.
   if (capList.length) {
-    const caps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(0x2b2f3a), capList.length);
+    const caps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(0x3d4454), capList.length);
     capList.forEach((b, k) => {
       _p.set(b.x, b.h + 0.55, b.z); _s.set(b.w + 0.7, 0.5, b.d + 0.7);
       caps.setMatrixAt(k, _m().compose(_p, _q, _s));
@@ -979,6 +1058,11 @@ export function buildCity(scene, seed) {
     // z=150 road surfaces.
     const z = [32, 52, 95, 115, 133, 175][i], h = 11 + (i % 3) * 3;
     _p.set(193, h / 2 + 0.3, z); _s.set(10, h, 15); decoInst.setMatrixAt(i, _m().compose(_p, _q, _s));
+    // Per-instance colour, like every other building mesh: an instanced
+    // facade mesh with NO instanceColor is the one class that came up
+    // pure black on the player's phone (see the town fix in
+    // buildPeninsula). Deterministic cycle — no rng, stream untouched.
+    decoInst.setColorAt(i, new THREE.Color(styles.pastel.tint[i % styles.pastel.tint.length]));
     _p.set(193, h + 1.4, z); _s.set(1, 1, 1); stepInst.setMatrixAt(i, _m().compose(_p, _q, _s));
     colliders.push({ x: 193, z, hw: 5, hd: 7.5 });
     buildingRecords.push({ x: 193, z, hw: 5, hd: 7.5 });
@@ -986,6 +1070,7 @@ export function buildCity(scene, seed) {
     s.position.set(198.5, h - 1.6, z); s.rotation.y = Math.PI / 2; scene.add(s);
   });
   decoInst.instanceMatrix.needsUpdate = true; stepInst.instanceMatrix.needsUpdate = true;
+  if (decoInst.instanceColor) decoInst.instanceColor.needsUpdate = true;
   scene.add(decoInst); scene.add(stepInst);
   { // Marlin Point Lighthouse: banded tower, lit lamp, sweeping beam cone.
     const bands = [0xf5f6fa, 0xd63031, 0xf5f6fa, 0xd63031, 0xf5f6fa];
@@ -1033,7 +1118,7 @@ export function buildCity(scene, seed) {
     s.position.set(6, 4.6, -220); scene.add(s);
   }
   { // Rocket gantry silhouette across the bay.
-    const gantry = new THREE.Mesh(new THREE.BoxGeometry(4, 44, 4), mat(0x3a3f4a));
+    const gantry = new THREE.Mesh(new THREE.BoxGeometry(4, 44, 4), mat(0x4a5262));
     gantry.position.set(330, 22, -40); scene.add(gantry);
     const rocket = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 30, 8), mat(0xdfe6e9));
     rocket.position.set(338, 15, -40); scene.add(rocket);
@@ -1045,7 +1130,7 @@ export function buildCity(scene, seed) {
   // stood across the causeway band).
   for (let i = 0; i < 7; i++) {
     const x = [-24, -17, 17, 24, -20, 20, -13.5][i], z = 396 + (i % 2) * 12;
-    const hse = new THREE.Mesh(new THREE.BoxGeometry(5.5, 4, 5.5), new THREE.MeshLambertMaterial({ map: styles.pastel.tex }));
+    const hse = new THREE.Mesh(new THREE.BoxGeometry(5.5, 4, 5.5), new THREE.MeshLambertMaterial({ map: styles.pastel.tex, color: [0xffffff, 0xffe8c8, 0xd8f0d0, 0xffd8d8][i % 4] }));
     hse.position.set(x, 2.3, z); scene.add(hse);
     colliders.push({ x, z, hw: 2.8, hd: 2.8 });
     buildingRecords.push({ x, z, hw: 2.8, hd: 2.8 });
@@ -1058,7 +1143,7 @@ export function buildCity(scene, seed) {
   // the x=±75 / z=-75 junction and the fire station sat across the whole
   // x=150 / z=-150 corner: blank walls eating half of two streets each.
   function landmarkBldg(fx, fz, color, label, fg, signFace) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(16, 12, 14), mat(color));
+    const b = new THREE.Mesh(new THREE.BoxGeometry(16, 12, 14), new THREE.MeshLambertMaterial({ map: shellTex, color }));
     b.position.set(fx, 6, fz); scene.add(b);
     colliders.push({ x: fx, z: fz, hw: 8, hd: 7 });
     buildingRecords.push({ x: fx, z: fz, hw: 8, hd: 7 });
@@ -1119,7 +1204,7 @@ function buildPeninsula(scene, rng) {
   }
   // Lake Okeechobee: a broad water disc biting into the land east of the road.
   const lake = new THREE.Mesh(new THREE.CylinderGeometry(95, 95, 1, 24), mat(0x2e6e8c));
-  lake.scale.set(1.25, 1, 0.8); lake.position.set(85, -0.5, -780); scene.add(lake);
+  lake.scale.set(LAKE_OKEECHOBEE.rx / 95, 1, LAKE_OKEECHOBEE.rz / 95); lake.position.set(LAKE_OKEECHOBEE.x, -0.5, LAKE_OKEECHOBEE.z); scene.add(lake);
   // The highway itself: one long road plane, dashes down its centre.
   const hw = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W, -NORTH_END - 180), mat(0x39404d));
   hw.rotation.x = -Math.PI / 2; hw.position.set(0, 0.02, (-180 + NORTH_END) / 2); scene.add(hw);
@@ -1173,11 +1258,33 @@ function buildPeninsula(scene, rng) {
     buildingCounts['Peninsula towns'] = (buildingCounts['Peninsula towns'] || 0) + n;
   }
   const townInst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ map: townTex }), blocks.length);
+  // ROOT CAUSE of the Palmetto Flats black slabs: this was the ONLY
+  // facade-textured InstancedMesh in the world that never called
+  // setColorAt. In three r128 instanceColor is a shader-program input
+  // (USE_INSTANCING_COLOR / USE_COLOR), so the towns compiled the odd
+  // program out — and on the player's phone GPU that program sampled
+  // the facade as pure black: the screenshot's town faces measure
+  // exactly (0,0,0) while the land, road, palms and every southern
+  // building (all setColorAt'd) render normally in the same frame. The
+  // canvas itself was never the problem — dumped in Node it is a cream
+  // facade, mean luminance 172, 0% near-black. So the towns now get
+  // per-instance tints exactly like the southern styles, plus the
+  // parapet-cap trim the south already had. Tints come from a SEPARATE
+  // rng: the shared stream (and every placement downstream) is untouched.
+  const townTintRng = makeRng(20261124);
+  const townTints = [0xffffff, 0xffe8c8, 0xd8f0d0, 0xffd8d8, 0xcfe4ff];
+  const townCaps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(0x3d4454), blocks.length);
   blocks.forEach((b, k) => {
     _p.set(b.x, b.h / 2 + 0.3, b.z); _s.set(b.w, b.h, b.d);
     townInst.setMatrixAt(k, _m().compose(_p, _q, _s));
+    townInst.setColorAt(k, new THREE.Color(pick(townTintRng, townTints)));
+    _p.set(b.x, b.h + 0.55, b.z); _s.set(b.w + 0.7, 0.5, b.d + 0.7);
+    townCaps.setMatrixAt(k, _m().compose(_p, _q, _s));
   });
-  townInst.instanceMatrix.needsUpdate = true; scene.add(townInst);
+  townInst.instanceMatrix.needsUpdate = true;
+  if (townInst.instanceColor) townInst.instanceColor.needsUpdate = true;
+  townCaps.instanceMatrix.needsUpdate = true;
+  scene.add(townInst); scene.add(townCaps);
 }
 
 // ---- People ---------------------------------------------------------------
@@ -1355,6 +1462,24 @@ export function makeProtagonist(who) {
   return g;
 }
 
+// A proper lightbar, not a slab: a low dark base bar carrying two thin
+// lenses (left / right). The group is g.userData.lightbar; the lenses live
+// in bar.userData.lenses so police.js / fire.js can flash the two halves
+// in alternation (a single unlit box read as a flat red slab on the roof).
+function makeLightbar(leftColor, rightColor) {
+  const bar = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.58),
+    new THREE.MeshLambertMaterial({ color: 0x14181f }));
+  base.position.y = -0.04; bar.add(base);
+  const lens = (c, x) => {
+    const l = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.15, 0.5),
+      new THREE.MeshBasicMaterial({ color: c }));
+    l.position.set(x, 0.06, 0); bar.add(l); return l;
+  };
+  bar.userData.lenses = [lens(leftColor, -0.4), lens(rightColor, 0.4)];
+  return bar;
+}
+
 // ---- Vehicles ---------------------------------------------------------------
 // One factory for every stealable class: sedan cars, motorcycles (with a
 // visible rider figure), box trucks, police sedans (livery + light bar) and
@@ -1395,8 +1520,8 @@ export function makeVehicle(kind, color, opts) {
     stripe.position.y = 1.5; g.add(stripe);
     const ladder = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.25, 6.4), m(0xdfe6e9));
     ladder.position.y = 2.5; g.add(ladder);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.25, 0.6), new THREE.MeshBasicMaterial({ color: 0xff3838 }));
-    bar.position.set(0, 2.5, 3.4); g.add(bar);
+    const bar = makeLightbar(0xff3838, 0xfff2cc); // fire: red / warm-white halves
+    bar.position.set(0, 2.42, 3.4); g.add(bar);
     g.userData.lightbar = bar;
     axleAt(0.5, 2.7, 0.5, 2.4); axleAt(0.5, -2.7, 0.5, 2.4);
   } else { // sedan body for cars; police adds livery and a light bar
@@ -1408,8 +1533,8 @@ export function makeVehicle(kind, color, opts) {
     if (kind === 'police' || o.lightbar) {
       const door = new THREE.Mesh(new THREE.BoxGeometry(2.14, 0.4, 1.6), m(0x273c75));
       door.position.set(0, 0.7, -0.2); g.add(door);
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.25, 0.6), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
-      bar.position.set(0, 1.65, -0.2); g.add(bar);
+      const bar = makeLightbar(0xff2222, 0x2f7bff); // police: red / blue halves
+      bar.position.set(0, 1.63, -0.2); g.add(bar);
       g.userData.lightbar = bar;
     }
     if (o.spoiler) {

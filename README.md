@@ -6,38 +6,66 @@
 
 Bounty page: https://make.fun/bounty/gta6-01
 
-A stylized **low-poly 3D open-world crime game** in the browser — bright saturated colours, blocky buildings and characters, flat materials, no photorealism. Built with a vendored copy of Three.js (r128) that loads locally; nothing is fetched over the network at runtime.
+A stylized **low-poly 3D open-world crime game** in the browser, set on a **long Florida peninsula at dusk** — sunset-gradient sky, warm low sun, neon waking up over pastel facades. Built with a vendored copy of Three.js (r128) that loads locally; nothing is fetched over the network at runtime, and every texture is generated on a canvas at boot (no external images).
 
 ## Story
 
-Courier **Vera Solano** owes a debt to fixer **Lucia Marrero** in the coastal city of Palm Cove. Work it off across four story missions — a first delivery run, a marked car to steal, three debtors to lean on, and a final sunset escape under a four-star chase — then keep earning in free roam.
+Courier **Vera Solano** — or her partner **Dario "Dax" Vega**, your choice at New Game — owes a debt to fixer **Lucia Marrero** in the coastal city of Palm Cove. A New Game **wakes the chosen lead up in their own bed** at home in Coral Heights; Lucia's first message and the first mission marker only arrive once you step outside. Work the debt off across four story missions, and *how* you work decides the ending: debtors spared or taken out, money earned, busts on your record and side work all feed **six branching endings** — from *Clean Getaway* to *Kingpin of the Cove* to *Queen of the Ashes*. The finale is replayable from the pause menu, and unlocked endings are recorded in your save and stats.
 
-## Features
+## The world — a real peninsula, not a diorama
 
-- **A living city**: a road grid with five named districts (Marina Mile, The Docks, Coral Heights, Old Town, Palm District) shown on the HUD as you move, instanced low-poly buildings, palm trees along the streets, and a beach + ocean edge.
-- **On foot and behind the wheel**: third-person walking/sprinting with a mouse-orbit camera, parked cars to steal, pooled traffic AI driving the grid, and pedestrians who stroll the sidewalks and flee danger.
-- **Wanted system (0–5 stars)**: crimes raise the heat, pooled police cars chase you, breaking line of sight cools it down star by star, a bust meter fills when officers are close and you are slow, and a police helicopter with a spotlight cone circles you at 4–5 stars. Get **BUSTED** and you respawn at the police station minus a fine; hit zero health and you are **WASTED**, respawning at the hospital.
-- **Four story missions** with dialogue boxes, waypoint markers and cash rewards: *First Run*, *Hot Wheels*, *Collections*, and *Sunset Run*.
-- **Side activities**: a repeatable checkpoint **street race** against a par time, and **taxi fares** (pick up a passenger, earn the fare plus a speed tip).
-- **HUD**: health bar, money, wanted stars, current objective, district name, weapon/speed — plus a live canvas minimap with roads, the player arrow, mission markers and police blips.
-- **Combat**: fists (F) from the start; Lucia lends Vera a pistol (mouse click) during *Collections*.
-- **Sound**: a small WebAudio synth — pickup blips, sirens, gunshots, crash thuds and success stings. No audio files.
-- **Saves & stats**: a localStorage autosave slot with Continue, and a stats screen (cars stolen, distance driven, missions and side activities completed, completion %).
-- **Performance discipline**: box geometry only, flat Lambert materials, one directional + one hemisphere light, shadows off, fog-capped view distance, pixel ratio clamped to 1.5, and fixed object pools for traffic, pedestrians and police — no per-frame allocations in the hot loop.
+- **Scale**: the landmass runs about **4,720 units** from the Southernmost Point buoy in the Keys (z +442) to the far panhandle shore (z −4,280). The city is only the southern tip: from Palm Cove, the **peninsula highway** runs north through the Everglades marsh, past Lake Okeechobee and a chain of named roadside towns (Palmetto Flats, Cypress Junction, Kissimmee Prairie, Suwannee Crossing, Panhandle Gate) to Tallahassee Palms. At normal car speed the tip-to-far-shore drive takes **minutes**. Every edge of the world is a shoreline — you run out of land into the sea, never into an invisible wall near spawn.
+- **A deliberate city**: a packed downtown core with the tallest glass towers, the **Ocean Drive deco strip** and marina on the east beach, the container **port** at The Docks, low residential sprawl in Coral Heights, brick Old Town, and the palm boulevards of the Palm District. Roughly **double the buildings** of the first build — eight plots per block — each district reading differently and named live on the HUD, as are landmarks (Marlin Point Lighthouse, Glades Airboat Dock, the Cape Marlin gantry across the bay, and every region on the drive north).
+- **Road structures**: the **Palm Flyover** carries a boulevard over a crossing road, the **Old Town Underpass** dips beneath another, both fully drivable, with working traffic lights (red/yellow/green cycles that traffic AI obeys), tree-lined sidewalks, and street lamps with lit heads and light pools at dusk.
+- **Solid street furniture**: trees, lamp posts, traffic-light poles, sign posts, hydrants and palms have real collision — you walk around them, pedestrians step around them, and a car that hits one stops or glances off with damage. Nothing ghosts through a tree any more.
+- **Facades with faces**: canvas-generated window grids (lit and unlit), ground-floor storefronts, neon signs and billboards for original Palm Cove brands (Cove Cola, Hotel Marlin, Neon Palms, Marlin Motors…).
+
+## The people
+
+- **Two playable leads with faces and hair**: Vera Solano (blonde ponytail tied with a pink band, pink tank top, ripped jeans) and Dax Vega (dark spiky hair, open floral shirt over a white tee, gold chain, pink trousers) — distinguishable by silhouette alone, with painted canvas faces (eyes, brows, mouth). Pedestrians get the same faces plus a rotation of hair styles and colours, so crowds are not clones. The unpicked lead stays in the story as an NPC partner at Lucia's garage.
+- **Real locomotion**: articulated legs and arms on hip/shoulder pivots. Walking is a relaxed stride with counter-swinging arms; **sprinting (Shift, or hold the touch RUN button)** is a different gait — faster cycle, longer stride, hard arm pump, forward lean (walk 7 units/s, sprint 12). Standing still breathes: chest, head drift, weight shift. No stamina meter — sprinting is free, by design.
+
+## Camera
+
+Third-person, and it finally moves with you: **drag the mouse to orbit freely** at any time; while you move and leave the mouse alone, the camera **eases around behind your heading** as you turn (a lerp, never a snap). Driving keeps its chase camera.
+
+## Interiors — walk in, walk out
+
+- **Your home** in Coral Heights (marked **HOME** on the minimap and full map): bedroom (bed, wardrobe, lamp), bathroom (shower, toilet, sink, mirror), living room (sofa, TV), kitchen (counters, fridge, table). The **bed is a save point**: sleep saves the game and skips to morning.
+- **Houses/apartments** in the residential districts, simply furnished.
+- **Palm Kitchen** restaurant: sit-down tables inside, and a proper meal at the counter ($18, +50 HP).
+- **Marlin & Co. Jewels**: glass display cases to browse — or **smash-and-grab** one for +$220 and +3 wanted stars, on the normal wanted/economy systems.
+- **Cove Bank** lobby: counters, a vault door, and a **working ATM** (deposit/withdraw $50 against a vault balance).
+- The menu facilities stay as they were: **Cove Mart** minimarket, **Apotik Sehat** pharmacy, **Marlin Arms** gun shop (**ammo only** — weapons are never sold), Solano Gas, plus the hospital and **Palm Cove Correctional** prison (serve the time, or pay bail with B).
+
+## Gameplay
+
+- **Five vehicle classes, all stealable**: cars, **motorcycles** (fast, nimble, rider visible), **trucks** (slow, heavy, hit harder), **police cars**, and **fire trucks** — with per-class handling and a stats breakdown by class. Traffic AI mixes city and highway traffic and stops at red lights.
+- **Wanted system (0–5 stars)**: police chases, line-of-sight decay, a bust meter, and a spotlight helicopter at 4–5 stars. **BUSTED** means time inside Palm Cove Correctional; **WASTED** wakes you at the hospital for a small treatment fee.
+- **Combat & the 5-slot hotbar**: you start with **nothing but fists**. The pistol, the **sniper rifle** (scoped zoom with right-mouse/V, long range, limited rounds), snacks, armour vests, medkits and ammo are all **found as world pickups** or bought. Slots 1–5 select, X uses consumables; a full hotbar honestly refuses new pickups.
+- **Fire & damkar**: heavily damaged cars catch fire, burn, and explode (spreading damage and heat); stand too close and you burn too. Long-burning fires dispatch a **fire truck** that drives to the scene and sprays the flames out; burnt wrecks stay as charred props.
+- **Quests, tracked freely**: the **quest log** (pause menu, or the QUESTS button on the HUD) separates the **MAIN QUEST** — Lucia's chain, in order, current step highlighted, finished steps ticked — from **SIDE QUESTS** (the Causeway Run race, taxi fares, and The Long Drive North to the far shore), each with its reward and a location hint. Tap any quest to **track** it: the HUD objective and the world marker switch instantly, one at a time, and the story waits while you wander. Completing a tracked side quest returns tracking to the main quest. Quest progress persists alongside the save.
+- **A first-run tutorial**, woven into the wake-up: contextual prompts for moving, the camera, sprinting, interacting, the hotbar, stealing and driving a vehicle, and fighting — labelled for keyboard or touch, advancing only when you actually do each thing, skippable at any time, and never shown again once finished or skipped. The **Controls** screen (pause menu and Settings) lists every input for both.
+- **Menu & settings**: NEW GAME / LOAD GAME (with save info) / SETTINGS on the title screen, and settings in the pause menu too — volume + mute, **30/60 FPS cap**, **Standard/HD graphics tiers**, brightness, and an optional **on-screen joystick** with E/F/X and hold-to-sprint RUN buttons. Settings persist in localStorage.
+- **Sound**: a WebAudio synth (sirens, gunshots, the sniper's crack, explosions, fire-truck two-tone) driven by the settings volume. No audio files.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
 | W A S D | Move / drive (arrow keys also steer) |
-| Mouse (drag or pointer lock) | Orbit camera |
-| Shift | Sprint |
-| E | Enter / exit a car (steal it) |
-| F | Punch / intimidate |
-| Mouse click | Fire the pistol (once armed) |
-| R | Start the street race (in a car, at the Old Town start) |
+| Mouse drag | Orbit camera (auto-follows behind you while moving) |
+| Shift (hold) | Sprint on foot (touch: hold RUN) |
+| E | Enter / exit a vehicle · enter a building · shop |
+| F | Punch / lean on a debtor (spare) · use (bed, counter, ATM, jewel case) |
+| Mouse click | Fire equipped weapon · shoot near a debtor (take out) |
+| Right-mouse hold or V | Sniper scope |
+| 1–5 | Select hotbar slot |
+| X | Use selected consumable |
+| R | Start the Causeway Run race (in a car, at the start) |
 | T | Start taxi work (in a car) |
-| Esc or P | Pause / resume |
+| B | Pay bail while in prison |
+| Esc or P | Pause / resume (quest log, map, stats, controls, settings, replay finale) |
 | S (on title) | Stats screen |
 
 ## How to run
@@ -48,35 +76,43 @@ node serve.ts
 
 Then open http://localhost:8080 in a desktop browser. No build step and no install: `serve.ts` serves the `game/` folder as-is.
 
-Deterministic screenshot scenes are staged from URL parameters, e.g. `http://localhost:8080/?shot=chase&seed=1` (shots: `title`, `drive`, `chase`, `mission`).
+Deterministic screenshot scenes are staged from URL parameters, e.g. `http://localhost:8080/?shot=chase&seed=1` (shots: `title` = character choice, `drive`, `chase`, `map`).
 
 ## Source structure
 
 ```
 game/
-  index.html        canvas container, HUD DOM, title/pause/stats overlays
+  index.html        canvas container, HUD DOM, menus (title/choice/pause/quest log/controls/map/settings/shop/ending/stats), tutorial prompt
   vendor/three.min.js  vendored Three.js r128 (UMD build, MIT licence header in file)
   src/
-    config.js       constants, district list, tuning
+    config.js       city layout, districts, vehicle handling, balance tuning
     random.js       seeded RNG (mulberry32)
-    state.js        shared mutable game state
-    city.js         city generation: roads, districts, instanced buildings/palms, beach + ocean, markers
-    traffic.js      pooled AI traffic + parked cars to steal
-    pedestrians.js  pooled sidewalk walkers who flee danger
-    player.js       on-foot controller + third-person camera
-    driving.js      car entry/theft, arcade driving physics, chase camera, damage
+    state.js        shared mutable game state (incl. story tracking for endings)
+    settings.js     persisted settings: volume, FPS cap, graphics tier, brightness, joystick
+    city.js         world generation: dusk sky, facades, districts, peninsula spine + towns, structures, Keys, marsh, landmarks, prop colliders, people + vehicle factories
+    traffic.js      pooled mixed-class AI traffic (city + highway) + parked vehicles to steal
+    pedestrians.js  pooled sidewalk + beach walkers with walk/flee cycles, who step around props
+    player.js       on-foot controller (walk/sprint gaits), articulated posing, orbit + auto-follow camera
+    driving.js      vehicle entry/theft, per-class arcade driving, prop/building impact damage
     police.js       wanted stars, chase AI, line-of-sight decay, bust meter, helicopter
-    combat.js       punches and the pistol
-    missions.js     story missions, dialogue, street race, taxi fares
-    hud.js          HUD DOM + 2D-canvas minimap
-    audio.js        WebAudio synth sound effects
-    save.js         localStorage save slot + stats persistence
+    combat.js       punches, pistol, scoped sniper rifle
+    fire.js         vehicle fires, explosions, charred wrecks, damkar fire-truck response
+    inventory.js    5-slot hotbar: weapons + consumables, selection, use
+    facilities.js   menu facilities, prison, and the walk-in interiors: home + wake-up, houses, restaurant, jewelry, bank
+    missions.js     story missions, dialogue choices, six endings, race, taxi, quest log data + tracking
+    hud.js          GTA-register HUD, hotbar, local minimap + Florida-silhouette full map (HOME marker)
+    audio.js        WebAudio synth sound effects (settings-driven master gain)
+    save.js         localStorage save slot (progress, inventory, endings, character)
     shots.js        deterministic ?shot= staging for screenshots
-    main.js         boot, state machine (title/playing/paused/stats), game loop
+    main.js         boot, state machine, game loop, tutorial, quest log + controls wiring, settings/joystick wiring
 main.ts             hands the entry in (copies game/ + screenshots/, writes dossier.json)
 serve.ts            tiny local static server for game/
 screenshots/        the four entry screenshots listed in shots.json
 ```
+
+## Performance discipline
+
+Canvas textures only; instanced or pooled props throughout (buildings, palms, trees, lamps, lights, containers, structures, highway furniture); the big peninsula adds land planes and instanced town blocks, not per-object overhead; traffic and pedestrians stay pooled around the city; shadows off, fog on, fixed pools for traffic/pedestrians/police, and no per-frame allocations in the hot loop. The standard graphics tier keeps the build light; the HD settings tier raises pixel ratio and view distance for stronger machines.
 
 ## Licence
 

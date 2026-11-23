@@ -1,11 +1,15 @@
-// localStorage autosave: one slot holding progress, money and lifetime stats.
+// localStorage autosave: one slot holding progress, money, lifetime stats,
+// story-tracking (ending inputs) and the endings unlocked so far.
 import { SAVE_KEY } from './config.js';
 import { G } from './state.js';
 export function saveGame() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       money: G.money, missionIndex: G.missionIndex, storyDone: G.storyDone,
-      weapon: G.weapon, stats: G.stats, savedAt: Date.now(),
+      weapon: G.weapon, weapons: G.weapons, sniperAmmo: G.sniperAmmo, character: G.character,
+      inventory: G.inventory, selectedSlot: G.selectedSlot, armour: G.armour,
+      stats: G.stats, track: G.track, endingsUnlocked: G.endingsUnlocked,
+      lastEnding: G.lastEnding, savedAt: Date.now(),
     }));
     return true;
   } catch (e) { return false; }
@@ -20,6 +24,14 @@ export function applySave(s) {
   if (!s) return;
   G.money = s.money ?? G.money; G.missionIndex = s.missionIndex ?? 0;
   G.storyDone = !!s.storyDone; G.weapon = s.weapon || 'Fists';
+  if (Array.isArray(s.weapons) && s.weapons.length) G.weapons = s.weapons;
+  G.sniperAmmo = s.sniperAmmo ?? G.sniperAmmo;
+  if (s.character) G.character = s.character;
+  if (Array.isArray(s.inventory)) G.inventory = s.inventory;
+  G.selectedSlot = s.selectedSlot ?? 0; G.armour = s.armour ?? 0;
   if (s.stats) G.stats = Object.assign(G.stats, s.stats);
+  if (s.track) G.track = Object.assign(G.track, s.track);
+  if (Array.isArray(s.endingsUnlocked)) G.endingsUnlocked = s.endingsUnlocked;
+  G.lastEnding = s.lastEnding || '';
 }
 export function clearSave() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }

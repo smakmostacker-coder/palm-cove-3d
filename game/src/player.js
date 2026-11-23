@@ -1,18 +1,32 @@
 // On-foot controller: WASD movement relative to the camera, Shift sprint,
-// mouse-orbit third-person camera, building collision.
+// mouse-orbit third-person camera, building collision. v2: walking works the
+// whole peninsula — city, beaches, causeway, Keys and the marsh edge — via
+// city.js clampWorld; scoped sniper aim narrows this camera through main.js.
 import { G } from './state.js';
 import { TUNING, SPAWN } from './config.js';
-import { collideBuildings } from './city.js';
-import { makePerson } from './city.js';
+import { collideBuildings, groundHeightAt } from './city.js';
+import { makeProtagonist } from './city.js';
 
 export const player = { mesh: null, pos: null, angle: 0, swing: 0, speedNow: 0 };
+let playerScene = null;
 export function buildPlayer(scene) {
-  player.mesh = makePerson(0x00a8ff, 0x2f3542, 0xf1c27d); // Vera: blue jacket
+  playerScene = scene;
+  player.mesh = makeProtagonist(G.character || 'vera');
   player.mesh.position.set(SPAWN.x, 0.3, SPAWN.z);
   player.pos = player.mesh.position;
   player.angle = Math.PI; // face north (-z is forward at yaw PI for our camera math)
   scene.add(player.mesh);
   return player;
+}
+export function setCharacter(who) {
+  G.character = who;
+  if (!playerScene || !player.mesh) return;
+  const old = player.mesh, pos = old.position.clone(), rot = old.rotation.y;
+  playerScene.remove(old);
+  player.mesh = makeProtagonist(who);
+  player.mesh.position.copy(pos); player.mesh.rotation.y = rot;
+  player.pos = player.mesh.position;
+  playerScene.add(player.mesh);
 }
 export function updatePlayer(dt, camera) {
   const k = G.keys;
@@ -35,7 +49,7 @@ export function updatePlayer(dt, camera) {
     player.swing += dt * speed * 1.6;
   }
   collideBuildings(player.pos, 0.7);
-  player.mesh.position.y = 0.3;
+  player.mesh.position.y = 0.3 + groundHeightAt(player.pos.x, player.pos.z, null);
   player.mesh.rotation.y = player.angle;
   player.mesh.userData.armL.rotation.x = Math.sin(player.swing) * (moving ? 0.7 : 0);
   player.mesh.userData.armR.rotation.x = -Math.sin(player.swing) * (moving ? 0.7 : 0);

@@ -3,7 +3,7 @@
 import { G } from './state.js';
 import { TUNING } from './config.js';
 import { makeCar } from './city.js';
-import { collideBuildings } from './city.js';
+import { collideBuildings, clampWorld, groundHeightAt } from './city.js';
 import { sfx } from './audio.js';
 
 export const cops = []; // {mesh,pos,angle,speed,active}
@@ -45,7 +45,7 @@ export function updatePolice(dt, targetPos, targetSpeed, onBusted) {
       c.active = true; c.mesh.visible = true;
       const a = (i / 4) * Math.PI * 2 + G.time;
       c.pos.set(targetPos.x + Math.cos(a) * 55, 0, targetPos.z + Math.sin(a) * 55);
-      c.pos.x = Math.max(-195, Math.min(195, c.pos.x)); c.pos.z = Math.max(-195, Math.min(195, c.pos.z));
+      clampWorld(c.pos); // pursuits now follow Vera onto the causeway and into the Glades edge
     }
     if (!should) { c.active = false; c.mesh.visible = false; return; }
     const dx = targetPos.x - c.pos.x, dz = targetPos.z - c.pos.z;
@@ -55,7 +55,7 @@ export function updatePolice(dt, targetPos, targetSpeed, onBusted) {
     if (dist > 1) { c.pos.x += (dx / dist) * speed * dt; c.pos.z += (dz / dist) * speed * dt; }
     collideBuildings(c.pos, 1.6);
     c.angle = Math.atan2(dx, dz);
-    c.mesh.position.copy(c.pos); c.mesh.rotation.y = c.angle;
+    c.mesh.position.copy(c.pos); c.mesh.position.y = groundHeightAt(c.pos.x, c.pos.z, null); c.mesh.rotation.y = c.angle;
     if (c.mesh.userData.lightbar) c.mesh.userData.lightbar.material.color.setHex(Math.floor(G.time * 6) % 2 ? 0xff0000 : 0x0066ff);
     for (const w of c.mesh.userData.wheels) w.rotation.x += speed * dt * 2;
   });

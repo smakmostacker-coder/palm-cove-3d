@@ -9,3 +9,5 @@ export function makeRng(seed) {
   };
 }
 export function pick(rng, arr) { return arr[Math.floor(rng() * arr.length) % arr.length]; }
+// Weighted pick helper used by the dusk city dressing (facade styles, props).
+export function pickWeighted(rng, pairs) { let r = rng(); for (const [v, w] of pairs) { if ((r -= w) <= 0) return v; } return pairs[pairs.length - 1][0]; }

@@ -6,71 +6,142 @@
 <title>Palm Cove — a low-poly open-world crime game</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌴</text></svg>">
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#87ceeb; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:#fff; }
+  html, body { margin:0; height:100%; overflow:hidden; background:#191238; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:#fff; }
   #app { position:fixed; inset:0; }
   canvas.webgl { display:block; }
-  .panel { background:rgba(10,14,24,.72); border:2px solid rgba(255,255,255,.25); border-radius:12px; }
+  .panel { background:rgba(10,10,18,.66); border:2px solid rgba(255,255,255,.22); border-radius:10px; }
   #hud { position:fixed; inset:0; pointer-events:none; display:none; }
-  #topbar { position:absolute; top:12px; left:12px; padding:10px 14px; min-width:210px; }
-  #healthWrap { width:200px; height:14px; background:#222; border-radius:7px; overflow:hidden; margin:6px 0; }
+  #topbar { position:absolute; top:12px; left:12px; padding:8px 14px; min-width:200px; }
+  #healthWrap { width:190px; height:12px; background:#1c1c26; border:1px solid rgba(255,255,255,.4); overflow:hidden; margin:5px 0; }
   #healthFill { height:100%; width:100%; background:#2ed573; }
-  #money { font-size:22px; font-weight:800; color:#7bed9f; }
-  #stars { font-size:22px; letter-spacing:2px; min-height:26px; }
-  #weapon { font-size:13px; opacity:.9; }
+  #armourWrap { width:190px; height:8px; background:#1c1c26; border:1px solid rgba(255,255,255,.3); overflow:hidden; margin:3px 0; display:none; }
+  #armourFill { height:100%; width:0%; background:#54a0ff; }
+  #money { font-size:26px; font-weight:900; font-style:italic; color:#7bed9f; text-shadow:2px 2px 0 #10331a; letter-spacing:1px; }
+  #stars { position:absolute; top:10px; right:16px; font-size:30px; letter-spacing:3px; min-height:36px; color:#ffd32a; text-shadow:2px 2px 0 #000; }
+  #weapon { font-size:14px; font-weight:800; font-style:italic; text-transform:uppercase; opacity:.95; }
   #objectiveBox { position:absolute; top:12px; left:50%; transform:translateX(-50%); max-width:520px; padding:8px 16px; text-align:center; font-weight:700; font-size:15px; }
-  #district { position:absolute; top:12px; right:12px; padding:8px 16px; font-size:20px; font-weight:800; text-shadow:0 2px 6px #000; background:rgba(10,14,24,.45); border-radius:10px; }
-  #minimap { position:absolute; right:12px; bottom:12px; width:180px; height:180px; border:2px solid rgba(255,255,255,.5); border-radius:10px; }
-  #prompt { position:absolute; bottom:210px; left:50%; transform:translateX(-50%); padding:8px 18px; font-weight:700; display:none; }
+  #district { position:absolute; top:52px; right:14px; padding:4px 10px; font-size:24px; font-weight:900; font-style:italic; text-transform:uppercase; text-shadow:2px 2px 0 #000; color:#ffd9ec; }
+  #minimap { position:absolute; right:12px; bottom:12px; width:150px; height:190px; border:2px solid rgba(255,255,255,.55); border-radius:10px; }
+  #hotbar { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; pointer-events:auto; }
+  .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.35); border-radius:8px; background:rgba(10,10,18,.66); position:relative; text-align:center; cursor:pointer; }
+  .slot.sel { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.55); }
+  .slotKey { position:absolute; top:1px; left:5px; font-size:11px; font-weight:800; opacity:.75; }
+  .slotIcon { font-size:24px; line-height:52px; }
+  .slotCount { position:absolute; bottom:1px; right:5px; font-size:12px; font-weight:800; color:#ffd32a; }
+  #prompt { position:absolute; bottom:220px; left:50%; transform:translateX(-50%); padding:8px 18px; font-weight:700; display:none; }
   #dialogue { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); width:min(640px,90vw); padding:12px 18px; display:none; }
   #dialogueWho { color:#ffd32a; font-weight:800; margin-bottom:4px; }
-  #bustWrap { position:absolute; bottom:230px; left:50%; transform:translateX(-50%); width:220px; padding:6px 10px; display:none; text-align:center; font-weight:800; }
+  #bustWrap { position:absolute; bottom:250px; left:50%; transform:translateX(-50%); width:220px; padding:6px 10px; display:none; text-align:center; font-weight:800; }
   #bustBar { height:10px; background:#222; border-radius:5px; overflow:hidden; margin-top:4px; }
   #bustFill { height:100%; width:0%; background:#ff4757; }
-  #banner { position:absolute; top:34%; left:50%; transform:translate(-50%,-50%); font-size:64px; font-weight:900; letter-spacing:4px; color:#ff4757; text-shadow:0 4px 0 #000; display:none; }
-  .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; }
-  #menu { background:linear-gradient(180deg, rgba(255,107,129,.25), rgba(10,14,24,.55)); }
-  #menu h1 { font-size:84px; margin:0; letter-spacing:3px; color:#ffd32a; text-shadow:0 5px 0 #e84393, 0 10px 24px #000; }
-  #menu p.sub { font-size:19px; max-width:560px; text-shadow:0 2px 6px #000; }
+  #banner { position:absolute; top:34%; left:50%; transform:translate(-50%,-50%); font-size:64px; font-weight:900; font-style:italic; letter-spacing:4px; color:#ff4757; text-shadow:0 4px 0 #000; display:none; }
+  #scope { position:fixed; inset:0; pointer-events:none; display:none; z-index:5;
+    background:radial-gradient(circle at center, transparent 150px, rgba(0,0,0,.92) 155px); }
+  #scope::before, #scope::after { content:''; position:absolute; background:rgba(0,0,0,.85); }
+  #scope::before { left:50%; top:0; width:2px; height:100%; transform:translateX(-50%); }
+  #scope::after { top:50%; left:0; height:2px; width:100%; transform:translateY(-50%); }
+  .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; z-index:10; }
+  #menu { background:linear-gradient(180deg, rgba(255,110,64,.30), rgba(25,18,56,.62)); }
+  #menu h1 { font-size:88px; margin:0; letter-spacing:3px; font-style:italic; color:#ffd32a; text-shadow:0 5px 0 #e84393, 0 10px 24px #000; }
+  #menu p.sub { font-size:19px; max-width:580px; text-shadow:0 2px 6px #000; }
   button { pointer-events:auto; cursor:pointer; font-size:19px; font-weight:800; padding:12px 34px; margin:6px; border:0; border-radius:10px; background:#ffd32a; color:#1e272e; }
   button:hover { background:#ffea70; }
   button.secondary { background:#dfe6e9; }
-  #saveInfo { font-size:14px; opacity:.9; text-shadow:0 1px 4px #000; }
-  #pauseMenu, #statsMenu { background:rgba(5,8,16,.72); display:none; }
-  .statgrid { font-size:18px; line-height:1.7; padding:18px 28px; text-align:left; }
-  .controls { font-size:14px; opacity:.92; line-height:1.6; text-shadow:0 1px 4px #000; max-width:620px; }
+  #saveInfo { font-size:14px; opacity:.92; text-shadow:0 1px 4px #000; }
+  #pauseMenu, #statsMenu, #settingsMenu, #shopMenu, #endingMenu, #mapMenu { background:rgba(5,6,14,.78); display:none; }
+  #endingMenu { background:linear-gradient(180deg, rgba(201,79,124,.35), rgba(5,6,14,.88)); }
+  #endingName { font-size:56px; font-style:italic; color:#ffd32a; text-shadow:0 4px 0 #e84393, 0 8px 20px #000; margin:0; }
+  #endingText { font-size:18px; max-width:640px; line-height:1.55; }
+  .statgrid { font-size:17px; line-height:1.65; padding:18px 28px; text-align:left; }
+  .controls { font-size:14px; opacity:.92; line-height:1.6; text-shadow:0 1px 4px #000; max-width:640px; }
+  .setrow { display:flex; align-items:center; gap:14px; font-size:17px; font-weight:700; margin:9px 0; min-width:420px; justify-content:space-between; }
+  .setrow input[type=range] { width:190px; }
+  .setrow select { font-size:16px; padding:5px 10px; border-radius:6px; }
+  #shopBody { display:flex; flex-direction:column; }
+  #joy { position:fixed; left:26px; bottom:86px; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.14); border:2px solid rgba(255,255,255,.4); display:none; z-index:8; touch-action:none; }
+  #joyKnob { position:absolute; left:50%; top:50%; width:52px; height:52px; border-radius:50%; background:rgba(255,255,255,.45); transform:translate(-50%,-50%); }
+  #joyBtns { position:fixed; right:26px; bottom:220px; display:none; flex-direction:column; gap:10px; z-index:8; }
+  #joyBtns button { width:58px; height:58px; border-radius:50%; padding:0; font-size:16px; }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="scope"></div>
 <div id="hud">
   <div id="topbar" class="panel">
-    <div id="stars"></div>
     <div id="money">$0</div>
     <div id="healthWrap"><div id="healthFill"></div></div>
+    <div id="armourWrap"><div id="armourFill"></div></div>
     <div id="weapon">Fists</div>
   </div>
+  <div id="stars"></div>
   <div id="objectiveBox" class="panel"><span id="objective"></span></div>
   <div id="district">Palm District</div>
-  <canvas id="minimap" width="180" height="180"></canvas>
+  <canvas id="minimap" width="150" height="190"></canvas>
+  <div id="hotbar"></div>
   <div id="prompt" class="panel"></div>
   <div id="bustWrap" class="panel">BUSTED METER<div id="bustBar"><div id="bustFill"></div></div></div>
   <div id="dialogue" class="panel"><div id="dialogueWho"></div><div id="dialogueText"></div></div>
   <div id="banner"></div>
   <div id="speed" style="display:none"></div>
 </div>
+<div id="joy"><div id="joyKnob"></div></div>
+<div id="joyBtns"><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button></div>
 <div id="menu" class="overlay">
   <h1>PALM COVE</h1>
-  <p class="sub">Courier <b>Vera Solano</b> owes fixer <b>Lucia Marrero</b> — and Palm Cove collects its debts in cash, cars and close calls. A low-poly open-world crime game.</p>
+  <p class="sub">Courier <b>Vera Solano</b> owes fixer <b>Lucia Marrero</b> — and Palm Cove collects its debts in cash, cars and close calls. A low-poly open-world crime game on a Florida peninsula at dusk.</p>
   <div>
-    <button id="btnNew">New Game</button>
-    <button id="btnContinue" class="secondary">Continue</button>
+    <button id="btnNew">NEW GAME</button>
+    <button id="btnContinue" class="secondary">LOAD GAME</button>
+    <button id="btnSettings" class="secondary">SETTINGS</button>
   </div>
   <p id="saveInfo"></p>
-  <p class="controls">WASD move / drive · Mouse orbit · Shift sprint · E enter/exit car · F punch · Click fire pistol (once armed) · R street race · T taxi · Esc/P pause</p>
+  <p class="controls">WASD move / drive · Mouse orbit · Shift sprint · E enter car / shop · F punch · Click fire · 1–5 hotbar · X use item · Right-mouse/V sniper scope · R race · T taxi · B bail · Esc/P pause</p>
+</div>
+<div id="choiceMenu" class="overlay" style="background:linear-gradient(180deg, rgba(255,110,64,.12), rgba(25,18,56,.35))">
+  <h1 style="font-size:52px;font-style:italic;color:#ffd32a;text-shadow:0 4px 0 #e84393,0 8px 20px #000;margin:0">CHOOSE YOUR LEAD</h1>
+  <p style="font-size:17px;max-width:600px;text-shadow:0 2px 6px #000">Two couriers, one debt. The partner you don't pick still rides with Lucia's crew — you'll meet them at the garage.</p>
+  <div>
+    <button id="btnPickVera">PLAY AS VERA SOLANO</button>
+    <button id="btnPickDax">PLAY AS DAX VEGA</button>
+  </div>
+  <p style="font-size:15px;max-width:620px;text-shadow:0 2px 6px #000"><b style="color:#ff9ecf">VERA SOLANO</b> — blonde ponytail, pink tank, ripped jeans. The courier who owes the debt.<br><b style="color:#7ef0d4">DARIO “DAX” VEGA</b> — floral shirt, gold chain, pink trousers. Her partner, the getaway driver.</p>
+  <div><button id="btnChoiceBack" class="secondary">Back</button></div>
 </div>
 <div id="pauseMenu" class="overlay">
   <h1 style="font-size:48px">PAUSED</h1>
-  <div><button id="btnResume">Resume</button><button id="btnStats2" class="secondary">Stats</button><button id="btnRestart" class="secondary">Restart</button></div>
+  <div><button id="btnResume">Resume</button><button id="btnMap" class="secondary">Map</button><button id="btnStats2" class="secondary">Stats</button></div>
+  <div><button id="btnReplayFinale" class="secondary">Replay Finale</button><button id="btnSettings2" class="secondary">Settings</button><button id="btnRestart" class="secondary">Restart</button></div>
+</div>
+<div id="mapMenu" class="overlay">
+  <h1 style="font-size:34px">PALM COVE — MAP</h1>
+  <canvas id="fullmap" width="300" height="540" style="border:2px solid rgba(255,255,255,.5);border-radius:10px"></canvas>
+  <div><button id="btnMapClose">Back</button></div>
+</div>
+<div id="settingsMenu" class="overlay">
+  <h1 style="font-size:44px">SETTINGS</h1>
+  <div class="panel" style="padding:18px 26px">
+    <div class="setrow"><span>Sound volume</span><input type="range" id="setVol" min="0" max="100" value="80"></div>
+    <div class="setrow"><span>Mute</span><input type="checkbox" id="setMute"></div>
+    <div class="setrow"><span>FPS cap</span><select id="setFps"><option value="60">60 FPS</option><option value="30">30 FPS</option></select></div>
+    <div class="setrow"><span>Graphics</span><select id="setQuality"><option value="standard">Standard</option><option value="hd">HD</option></select></div>
+    <div class="setrow"><span>Brightness</span><input type="range" id="setBright" min="50" max="150" value="100"></div>
+    <div class="setrow"><span>On-screen joystick</span><input type="checkbox" id="setJoy"></div>
+  </div>
+  <div><button id="btnSettingsBack">Back</button></div>
+</div>
+<div id="shopMenu" class="overlay">
+  <h1 style="font-size:40px" id="shopTitle">SHOP</h1>
+  <div id="shopBody"></div>
+  <p id="shopMsg" style="font-size:16px"></p>
+  <div><button id="btnShopClose">Leave (Esc)</button></div>
+</div>
+<div id="endingMenu" class="overlay">
+  <p style="font-size:15px;letter-spacing:3px;margin:0">ENDING REACHED</p>
+  <h1 id="endingName">CLEAN GETAWAY</h1>
+  <p id="endingText"></p>
+  <p id="endingMeta" style="opacity:.85"></p>
+  <div><button id="btnEndContinue">Continue Free Roam</button><button id="btnEndReplay" class="secondary">Replay Finale</button></div>
 </div>
 <div id="statsMenu" class="overlay">
   <h1 style="font-size:48px">PALM COVE — STATS</h1>

@@ -1,5 +1,8 @@
-// Combat: F punches nearby pedestrians (they drop, witnesses raise the heat),
-// and once Lucia arms Vera, mouse click fires the pistol.
+// Combat v2: F punches; mouse click fires the equipped weapon — the pistol
+// Lucia lends Vera, or the scoped sniper rifle (Part C). The equipped weapon
+// comes from the inventory hotbar selection (inventory.js owns that truth).
+// Sniper: hold right-mouse (or V) to scope — FOV narrows in main.js — shots
+// are long-range, high-damage, loud (3 stars), and cost 1 of 24 rounds.
 import { G } from './state.js';
 import { peds } from './pedestrians.js';
 import { commitCrime } from './police.js';
@@ -15,14 +18,31 @@ export function punch(originPos) {
   return hit;
 }
 export function intimidate(originPos) {
-  // Mission helper: a punch or an aimed pistol near a debtor counts as pressure.
   for (const p of peds) if (p.mesh.position.distanceTo(originPos) < 4) { p.flee = 1.5; return p; }
   return null;
 }
 export function shoot(originPos, scene) {
-  if (G.weapon !== 'Pistol') return false;
-  G.stats.shotsFired++; sfx.shot();
-  commitCrime(Math.max(2, G.wanted), 'Shots fired');
-  for (const p of peds) p.flee = Math.max(p.flee, 1);
-  return true;
+  if (G.weapon === 'Pistol') {
+    G.stats.shotsFired++; sfx.shot();
+    commitCrime(Math.max(2, G.wanted), 'Shots fired');
+    for (const p of peds) p.flee = Math.max(p.flee, 1);
+    return true;
+  }
+  if (G.weapon === 'Sniper') {
+    if (G.sniperAmmo <= 0) { sfx.fail(); return false; }
+    G.sniperAmmo--; G.stats.shotsFired++; sfx.sniper();
+    commitCrime(Math.max(3, G.wanted), 'Sniper fire');
+    // Long-range effect: the nearest pedestrian within 70 units in front goes
+    // down; scoped shots never miss the closest target in that cone.
+    let best = null, bd = 70;
+    for (const p of peds) { const d = p.mesh.position.distanceTo(originPos); if (d < bd) { bd = d; best = p; } }
+    if (best && (G.scoped || bd < 25)) { best.down = 6; }
+    for (const p of peds) p.flee = Math.max(p.flee, 1.5);
+    return true;
+  }
+  return false;
+}
+export function grantWeapon(id) {
+  // Back-compat helper: weapons enter through the inventory now.
+  import('./inventory.js').then((m) => { m.addItem(id); });
 }

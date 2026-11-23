@@ -4,9 +4,13 @@
 // game/vendor/), so it loads fully offline with no network request at runtime. This program
 // hands the entry in: it copies game/ and screenshots/ from beside this file to /output and
 // writes /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library. In Palm Cove you play courier Vera Solano, working off a debt to fixer Lucia
-// Marrero across five named districts — stealing cars, running packages, collecting debts
-// and outrunning a 0-to-5-star wanted system with police cars and a spotlight helicopter.
+// library. In Palm Cove you play courier Vera Solano or her partner Dax Vega (chosen in
+// 3D on the New Game screen), working off a debt to fixer Lucia Marrero on a dusk-lit
+// Florida peninsula — five districts plus the Keys causeways and the Glades marsh,
+// five stealable vehicle classes, working traffic lights, a flyover and an underpass,
+// found-not-granted weapons (pistol + scoped sniper) in a 5-slot hotbar, vehicle fires
+// with a responding damkar fire truck, shops, a prison for the busted, and six branching
+// endings decided by how you played — all under a 0-to-5-star wanted system.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

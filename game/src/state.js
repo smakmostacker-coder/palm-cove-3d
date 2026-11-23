@@ -47,6 +47,7 @@ export const G = {
   seed: 1,
   fpsFrames: 0,
   keys: {},
+  joyVec: { x: 0, y: 0 }, // continuous analog joystick vector (main.js initJoystick)
   mouseDown: false,
 };
 

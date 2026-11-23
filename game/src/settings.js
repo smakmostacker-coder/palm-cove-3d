@@ -13,6 +13,8 @@ export const settings = {
   quality: 'standard',
   brightness: 1,
   joystick: false,
+  radioStation: 0, // index into the radio stations in audio.js (0 = Neon FM)
+  radioOn: true,
 };
 
 export function loadSettings() {

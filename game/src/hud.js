@@ -8,9 +8,10 @@
 // southern tip, marsh, the long spine, the panhandle, the Keys arc.
 import { G } from './state.js';
 import { ROADS, WORLD, KEYS } from './config.js';
-import { NORTH_END, PANHANDLE_Z } from './city.js';
+import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, DIAG_SEG, PROM_POINTS } from './city.js';
 import { ITEM_DEFS } from './inventory.js';
-import { HOME } from './facilities.js';
+import { HOME, FACILITIES, ENTERABLES, PLACES } from './facilities.js';
+import { settings } from './settings.js';
 
 const el = {};
 export function initHud() {
@@ -70,6 +71,12 @@ export function updateHud(playerPos, targetPos, copPositions) {
   el.weapon.textContent = G.weapon + ammo + (G.driving ? ' · ' + Math.abs(Math.round((G.driving.speed || 0) * 3.6)) + ' km/h' : '');
   el.prompt.textContent = G.prompt || '';
   el.prompt.style.display = G.prompt ? 'block' : 'none';
+  // Touch devices get the on-screen controls (joystick + E/F/X buttons)
+  // automatically: settings.js promises this auto-enable, but the touch.js
+  // it names was never written, so phone players had NO interact button at
+  // all and could not enter any building. Enforce it here, every frame,
+  // where main.js's enforceChrome reads settings.joystick.
+  if (!settings.joystick && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) settings.joystick = true;
   el.bustWrap.style.display = G.bust > 0.02 ? 'block' : 'none';
   el.bustFill.style.width = (G.bust * 100) + '%';
   if (el.dialogue.style.display === 'block' && G.time > G.dialogueUntil) el.dialogue.style.display = 'none';
@@ -117,6 +124,39 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
     c.moveTo(px(-200), pz(r)); c.lineTo(px(200), pz(r));
   }
   c.stroke();
+  // The reworked south: mid streets, the diagonal avenue and the coastal
+  // promenade — drawn thinner than the ROADS so blocks read as blocks.
+  c.strokeStyle = '#39404d';
+  c.lineWidth = Math.max(1, 3.5 * sx);
+  c.beginPath();
+  for (const s of SOUTH_STREETS) {
+    if (s.axis === 'ns') { c.moveTo(px(s.at), pz(s.from)); c.lineTo(px(s.at), pz(s.to)); }
+    else { c.moveTo(px(s.from), pz(s.at)); c.lineTo(px(s.to), pz(s.at)); }
+  }
+  c.moveTo(px(DIAG_SEG.x1), pz(DIAG_SEG.z1)); c.lineTo(px(DIAG_SEG.x2), pz(DIAG_SEG.z2));
+  c.stroke();
+  c.strokeStyle = '#f2d492';
+  c.beginPath();
+  PROM_POINTS.forEach((p, k) => { if (k === 0) c.moveTo(px(p.x), pz(p.z)); else c.lineTo(px(p.x), pz(p.z)); });
+  c.stroke();
+  // Door markers: every enterable building and shop facility gets a cyan
+  // door square at its entrance point, lettered on the local minimap, so
+  // the gun shop / pharmacy / club can actually be found.
+  const doorSpots = [];
+  for (const e of ENTERABLES) if (e.door) doorSpots.push({ x: e.door.x, z: e.door.z, name: e.name });
+  for (const f of FACILITIES) if (f.door && !doorSpots.some((d) => Math.hypot(d.x - f.door.x, d.z - f.door.z) < 2)) doorSpots.push({ x: f.door.x, z: f.door.z, name: f.name });
+  for (const d of doorSpots) {
+    const mx = px(d.x), mz = pz(d.z);
+    if (mx < -8 || mz < -8 || mx > W2 + 8 || mz > S + 8) continue;
+    c.fillStyle = '#7ef0d4';
+    c.fillRect(mx - 3.5, mz - 3.5, 7, 7);
+    c.strokeStyle = '#14161c'; c.lineWidth = 1; c.strokeRect(mx - 3.5, mz - 3.5, 7, 7);
+    if (v.halfW <= 80) {
+      c.fillStyle = '#14161c';
+      c.font = '900 6px system-ui';
+      c.fillText(d.name.charAt(0), mx - 1.8, mz + 2.2);
+    }
+  }
   for (const k of KEYS) {
     c.fillStyle = '#4c8a4f';
     c.beginPath(); c.ellipse(px(0), pz(k.z), k.rx * sx, k.rz * sz, 0, 0, 7); c.fill();
@@ -157,6 +197,20 @@ export function drawFullMap() {
   if (!cv) return;
   const c = cv.getContext('2d');
   drawFloridaMap(c, cv.height, cv.width, window.__playerPos || { x: 0, z: 0 }, null, []);
+  // PLACES list under the map: every named facility and enterable with its
+  // street hint — the directory the player asked for. The element is
+  // created here (not in index.html) and refreshed on every map open.
+  const menu = document.getElementById('mapMenu');
+  if (menu && PLACES.length) {
+    let pl = document.getElementById('placesList');
+    if (!pl) {
+      pl = document.createElement('div');
+      pl.id = 'placesList';
+      pl.style.cssText = 'color:#fff;font:12px/1.5 system-ui,sans-serif;text-align:left;max-height:26vh;overflow:auto;margin-top:8px;padding:6px 10px;background:rgba(5,6,14,.55);border-radius:8px;max-width:92vw';
+      menu.appendChild(pl);
+    }
+    pl.innerHTML = '<b style="color:#ffd32a">PLACES · PALM COVE</b><br>' + PLACES.map((p) => p.name + (p.hint ? ' — ' + p.hint : '')).join('<br>');
+  }
   c.fillStyle = '#ffd32a';
   c.font = '900 15px system-ui';
   c.fillText('PALM COVE · FLORIDA PENINSULA', 14, 22);

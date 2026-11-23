@@ -47,17 +47,25 @@ export function updatePeds(dt, dangerPos, dangerRadius) {
     const pos = p.mesh.position;
     let sp = p.speed;
     let running = false;
+    // A ped with its own scare (an ejected driver fleeing his thief) runs
+    // from that point even when there is no global danger position.
+    const dp = dangerPos || (p.flee > 0 ? p.fleeFrom : null);
     if (dangerPos) {
       const dx = pos.x - dangerPos.x, dz = pos.z - dangerPos.z;
       if (dx * dx + dz * dz < dangerRadius * dangerRadius) p.flee = 1.2;
     }
-    if (p.flee > 0 && dangerPos) {
+    if (p.flee > 0 && dp) {
       p.flee -= dt; sp = 6; running = true;
-      const dx = pos.x - dangerPos.x, dz = pos.z - dangerPos.z;
+      const dx = pos.x - dp.x, dz = pos.z - dp.z;
       const l = Math.hypot(dx, dz) || 1;
       pos.x += (dx / l) * sp * dt;
       pos.z += (dz / l) * sp * dt;
       p.mesh.rotation.y = Math.atan2(dx, dz);
+      // Keep the stroll route under the ped's feet, so when the scare
+      // ends it resumes walking from here instead of snapping back.
+      if (p.axis === 'x') p.t = Math.max(-195, Math.min(195, pos.x));
+      else p.t = Math.max(-195, Math.min(195, pos.z));
+      if (p.flee <= 0) p.fleeFrom = null;
     } else {
       if (p.flee > 0) p.flee -= dt;
       p.t += sp * p.dir * dt;

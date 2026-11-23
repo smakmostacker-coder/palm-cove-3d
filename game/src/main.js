@@ -3,21 +3,24 @@
 // sniper + fire + damkar, five vehicle classes, the 5-slot hotbar, walk-in
 // interiors, working facilities + prison, a quest log with free tracking,
 // and the settings system (volume, FPS cap, Standard/HD graphics,
-// brightness, virtual joystick).
+// brightness, virtual joystick). All full-screen overlays go through one
+// state machine (showOverlay/enforceChrome below) — no handler pokes an
+// overlay's display directly — and touch drags on the canvas orbit the
+// camera through the same orbitCamera() path as the mouse.
 import { G, resetStats } from './state.js';
 import { districtAt, SPAWN, HOSPITAL } from './config.js';
 import { buildCity, updateLights, landmarkAt, makeProtagonist, buildingCounts, worldLength, NORTH_END } from './city.js';
 import { buildTraffic, updateTraffic, parkedCars, trafficCars } from './traffic.js';
 import { buildPeds, updatePeds, peds } from './pedestrians.js';
 import { buildPlayer, player, updatePlayer, updateCamera, orbitCamera, setCharacter, strideState } from './player.js';
-import { nearestStealable, enterCar, exitCar, updateDriving, vehicleHitCheck } from './driving.js';
-import { buildPolice, updatePolice, commitCrime, policePositions, cops } from './police.js';
+import { nearestStealable, nearestJackable, carjack, enterCar, exitCar, updateDriving, vehicleHitCheck } from './driving.js';
+import { buildPolice, updatePolice, commitCrime, policePositions, cops, officers } from './police.js';
 import { punch, shoot } from './combat.js';
 import { initMissions, updateMissions, onAction, onEnterCar, startRace, startTaxi, sidePrompt, missionTarget, startCurrentMission, setEndingHandler, replayFinale, computeEnding, finishFinale, setPartner, ENDINGS, questLogData, setTrackedQuest, getTrackedQuest } from './missions.js';
 import { initHud, updateHud, showDialogue, showBanner, drawFullMap } from './hud.js';
 import { saveGame, loadSave, applySave, clearSave } from './save.js';
 import { parseShot, stageShot } from './shots.js';
-import { sfx } from './audio.js';
+import { sfx, radio } from './audio.js';
 import { initFire, updateFire, fireState, forceIgnite } from './fire.js';
 import { buildFacilities, nearestFacility, buyItem, sendToPrison, updatePrison, payBail, FACILITIES, nearestInterior, enterInterior, updateInteriors, tryInteriorAction, setInteriorExitHook, startWakeUp, updateWake, cancelWake, isWaking, ENTERABLES } from './facilities.js';
 import { addItem, selectSlot, useSelected, syncWeapon, emptyInv, ITEM_DEFS } from './inventory.js';
@@ -57,14 +60,48 @@ const $ = (id) => document.getElementById(id);
 const menu = $('menu'), hud = $('hud'), pauseMenu = $('pauseMenu'), statsMenu = $('statsMenu');
 const shopMenu = $('shopMenu'), endingMenu = $('endingMenu'), mapMenu = $('mapMenu'), settingsMenu = $('settingsMenu');
 const questMenu = $('questMenu'), controlsMenu = $('controlsMenu');
+
+// ---- Overlay state machine ---------------------------------------------------
+// Single source of truth for which full-screen overlay is visible. Handlers
+// call showOverlay(name) (null = none) and never poke overlay displays
+// directly; enforceChrome() runs every frame and keeps the overlays, the
+// HUD and the touch controls consistent with overlayNow and G.mode.
+const OVERLAYS = {
+  menu: menu, choice: $('choiceMenu'), pause: pauseMenu, stats: statsMenu,
+  settings: settingsMenu, shop: shopMenu, ending: endingMenu, map: mapMenu,
+  quest: questMenu, controls: controlsMenu,
+};
+let overlayNow = 'menu';
+function showOverlay(name) {
+  overlayNow = name;
+  for (const [key, el] of Object.entries(OVERLAYS)) {
+    if (el) el.style.display = key === name ? 'flex' : 'none';
+  }
+}
+function enforceChrome() {
+  for (const [key, el] of Object.entries(OVERLAYS)) {
+    if (!el) continue;
+    const want = key === overlayNow ? 'flex' : 'none';
+    if (el.style.display !== want) el.style.display = want;
+  }
+  const hudWant = G.mode !== 'title' && !(G.mode === 'stats' && G.prevMode === 'title') ? 'block' : 'none';
+  if (hud.style.display !== hudWant) hud.style.display = hudWant;
+  const joyOn = settings.joystick && G.mode === 'playing';
+  const joyEl = $('joy'), joyBtnsEl = $('joyBtns');
+  const joyWant = joyOn ? 'block' : 'none';
+  if (joyEl.style.display !== joyWant) joyEl.style.display = joyWant;
+  const btnsWant = joyOn ? 'flex' : 'none';
+  if (joyBtnsEl.style.display !== btnsWant) joyBtnsEl.style.display = btnsWant;
+}
 onGraphics((s) => {
   if (s.quality === 'hd') { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); if (scene.fog) scene.fog.far = 560; camera.far = 760; }
   else { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25)); if (scene.fog) scene.fog.far = 320; camera.far = 420; }
   camera.updateProjectionMatrix();
 });
 applySettings();
-$('joy').style.display = settings.joystick ? 'block' : 'none';
-$('joyBtns').style.display = settings.joystick ? 'flex' : 'none';
+// Boot state: exactly the title menu — no choice overlay, no touch controls.
+showOverlay('menu');
+enforceChrome();
 
 function refreshSaveInfo() {
   const s = loadSave();
@@ -105,12 +142,8 @@ function startPlaying(useSave) {
   player.mesh.visible = true;
   G.onFoot = true;
   G.mode = 'playing';
-  menu.style.display = 'none'; pauseMenu.style.display = 'none'; statsMenu.style.display = 'none';
-  endingMenu.style.display = 'none'; mapMenu.style.display = 'none'; shopMenu.style.display = 'none';
-  questMenu.style.display = 'none'; controlsMenu.style.display = 'none';
-  $('choiceMenu').style.display = 'none';
+  showOverlay(null);
   window.__titleCam = null;
-  hud.style.display = 'block';
   if (useSave) {
     startCurrentMission(true);
   } else {
@@ -127,8 +160,7 @@ function completionPct() {
 function showStats() {
   G.prevMode = G.mode;
   G.mode = 'stats';
-  pauseMenu.style.display = 'none'; menu.style.display = 'none';
-  statsMenu.style.display = 'flex';
+  showOverlay('stats');
   const bc = G.stats.byClass || {};
   $('statsBody').innerHTML =
     'Vehicles stolen: <b>' + G.stats.stolen + '</b> (car ' + (bc.car || 0) + ' · moto ' + (bc.moto || 0) + ' · truck ' + (bc.truck || 0) + ' · police ' + (bc.police || 0) + ' · fire truck ' + (bc.firetruck || 0) + ')<br>' +
@@ -141,50 +173,46 @@ function showStats() {
     'Money: <b>$' + G.money + '</b> · Earned (story): <b>$' + G.track.earned + '</b><br>Completion: <b>' + completionPct() + '%</b>';
 }
 function closeStats() {
-  statsMenu.style.display = 'none';
-  if (G.prevMode === 'playing' || G.prevMode === 'paused') { G.mode = 'paused'; pauseMenu.style.display = 'flex'; hud.style.display = 'block'; }
-  else { G.mode = 'title'; menu.style.display = 'flex'; }
+  if (G.prevMode === 'playing' || G.prevMode === 'paused') { G.mode = 'paused'; showOverlay('pause'); }
+  else { G.mode = 'title'; showOverlay('menu'); }
 }
 function showEnding(id, def) {
   G.mode = 'ending';
   $('endingName').textContent = def.name;
   $('endingText').textContent = def.text.replaceAll('Vera', G.character === 'dax' ? 'Dax' : 'Vera');
   $('endingMeta').textContent = 'Ending ' + G.endingsUnlocked.length + ' of 6 unlocked · Spared ' + G.track.spared + ' · Took out ' + G.track.tookOut + ' · Earned $' + G.track.earned + ' · Busted ×' + G.track.busted;
-  endingMenu.style.display = 'flex';
+  showOverlay('ending');
   sfx.success();
 }
 setEndingHandler(showEnding);
 $('btnNew').onclick = () => {
-  menu.style.display = 'none';
-  $('choiceMenu').style.display = 'flex';
+  showOverlay('choice');
   window.__titleCam = { pos: [246, 10, 168], look: [168, 9, 108] };
 };
 $('btnPickVera').onclick = () => { G.character = 'vera'; startPlaying(false); };
 $('btnPickDax').onclick = () => { G.character = 'dax'; startPlaying(false); };
-$('btnChoiceBack').onclick = () => { $('choiceMenu').style.display = 'none'; menu.style.display = 'flex'; window.__titleCam = null; };
+$('btnChoiceBack').onclick = () => { showOverlay('menu'); window.__titleCam = null; };
 $('btnContinue').onclick = () => { if (loadSave()) startPlaying(true); };
-$('btnResume').onclick = () => { G.mode = 'playing'; pauseMenu.style.display = 'none'; };
+$('btnResume').onclick = () => { G.mode = 'playing'; showOverlay(null); };
 $('btnRestart').onclick = () => startPlaying(false);
 $('btnStats2').onclick = showStats;
 $('btnStatsBack').onclick = closeStats;
-$('btnEndContinue').onclick = () => { endingMenu.style.display = 'none'; G.mode = 'playing'; };
-$('btnEndReplay').onclick = () => { endingMenu.style.display = 'none'; replayFinale(); G.mode = 'playing'; };
-$('btnReplayFinale').onclick = () => { pauseMenu.style.display = 'none'; replayFinale(); G.mode = 'playing'; };
-$('btnMap').onclick = () => { pauseMenu.style.display = 'none'; mapMenu.style.display = 'flex'; drawFullMap(); };
-$('btnMapClose').onclick = () => { mapMenu.style.display = 'none'; if (G.mode === 'paused') pauseMenu.style.display = 'flex'; };
+$('btnEndContinue').onclick = () => { showOverlay(null); G.mode = 'playing'; };
+$('btnEndReplay').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
+$('btnReplayFinale').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
+$('btnMap').onclick = () => { showOverlay('map'); drawFullMap(); };
+$('btnMapClose').onclick = () => { if (G.mode === 'paused') showOverlay('pause'); else showOverlay(null); };
 
 // ---- Settings panel ---------------------------------------------------------
 let settingsFrom = 'title';
 function openSettings(from) {
   settingsFrom = from;
   syncSettingsUI();
-  menu.style.display = 'none'; pauseMenu.style.display = 'none';
-  settingsMenu.style.display = 'flex';
+  showOverlay('settings');
 }
 function closeSettings() {
-  settingsMenu.style.display = 'none';
-  if (settingsFrom === 'pause') { G.mode = 'paused'; pauseMenu.style.display = 'flex'; }
-  else { G.mode = 'title'; menu.style.display = 'flex'; }
+  if (settingsFrom === 'pause') { G.mode = 'paused'; showOverlay('pause'); }
+  else { G.mode = 'title'; showOverlay('menu'); }
 }
 function syncSettingsUI() {
   $('setVol').value = Math.round(settings.volume * 100);
@@ -193,7 +221,24 @@ function syncSettingsUI() {
   $('setQuality').value = settings.quality;
   $('setBright').value = Math.round(settings.brightness * 100);
   $('setJoy').checked = settings.joystick;
+  $('setRadio').value = settings.radioOn ? String(settings.radioStation) : 'off';
+  syncRadioUI();
 }
+// ---- Radio (backsound): starts on the first gesture, K / pause button /
+// touch RADIO button / Settings row all cycle the same stations + Off.
+function syncRadioUI() {
+  const btn = $('btnRadio');
+  if (btn) btn.textContent = 'Radio: ' + radio.stationName;
+}
+function cycleRadio() {
+  const name = radio.cycle();
+  syncRadioUI();
+  showDialogue('Radio', name === 'Off' ? 'Radio off.' : 'Now playing: ' + name, 2.5);
+}
+$('btnRadio').onclick = cycleRadio;
+syncRadioUI();
+addEventListener('pointerdown', () => radio.start(), { once: true });
+addEventListener('keydown', () => radio.start(), { once: true });
 $('btnSettings').onclick = () => openSettings('title');
 $('btnSettings2').onclick = () => openSettings('pause');
 $('btnSettingsBack').onclick = closeSettings;
@@ -202,35 +247,35 @@ $('setMute').onchange = (e) => { settings.muted = e.target.checked; applySetting
 $('setFps').onchange = (e) => { settings.fpsCap = parseInt(e.target.value, 10); applySettings(); };
 $('setQuality').onchange = (e) => { settings.quality = e.target.value; applySettings(); };
 $('setBright').oninput = (e) => { settings.brightness = e.target.value / 100; applySettings(); };
+$('setRadio').onchange = (e) => {
+  if (e.target.value === 'off') radio.setOn(false);
+  else radio.setStation(parseInt(e.target.value, 10));
+  syncRadioUI();
+};
 $('setJoy').onchange = (e) => {
   settings.joystick = e.target.checked;
-  $('joy').style.display = settings.joystick ? 'block' : 'none';
-  $('joyBtns').style.display = settings.joystick ? 'flex' : 'none';
-  applySettings();
+  applySettings(); // enforceChrome() owns the joy/joyBtns display now
 };
 
 // ---- Controls help: one screen, both input methods, from pause or settings -
 let controlsFrom = 'pause';
 function openControls(from) {
   controlsFrom = from;
-  pauseMenu.style.display = 'none'; settingsMenu.style.display = 'none';
-  controlsMenu.style.display = 'flex';
+  showOverlay('controls');
 }
 $('btnControls').onclick = () => openControls('pause');
 $('btnControls2').onclick = () => openControls('settings');
 $('btnControlsBack').onclick = () => {
-  controlsMenu.style.display = 'none';
-  if (controlsFrom === 'settings') settingsMenu.style.display = 'flex';
-  else if (G.mode === 'paused') pauseMenu.style.display = 'flex';
-  else menu.style.display = 'flex';
+  if (controlsFrom === 'settings') showOverlay('settings');
+  else if (G.mode === 'paused') showOverlay('pause');
+  else showOverlay('menu');
 };
 
 // ---- Quest log ---------------------------------------------------------------
 function openQuestLog() {
   if (G.mode === 'playing') G.mode = 'paused';
-  pauseMenu.style.display = 'none';
   renderQuestLog();
-  questMenu.style.display = 'flex';
+  showOverlay('quest');
 }
 function renderQuestLog() {
   const data = questLogData();
@@ -258,8 +303,8 @@ function renderQuestLog() {
 $('btnQuests').onclick = openQuestLog;
 $('btnQuestHud').onclick = () => { if (G.mode === 'playing') openQuestLog(); };
 $('btnQuestClose').onclick = () => {
-  questMenu.style.display = 'none';
-  if (G.mode === 'paused') pauseMenu.style.display = 'flex';
+  if (G.mode === 'paused') showOverlay('pause');
+  else showOverlay(null);
 };
 
 // ---- Shops -------------------------------------------------------------------
@@ -269,7 +314,7 @@ function openShop(fac) {
   G.mode = 'shop';
   $('shopTitle').textContent = fac.name;
   renderShop('Welcome to ' + fac.name + '. Cash: $' + G.money);
-  shopMenu.style.display = 'flex';
+  showOverlay('shop');
 }
 function renderShop(msg) {
   $('shopMsg').textContent = msg;
@@ -283,12 +328,12 @@ function renderShop(msg) {
     body.appendChild(b);
   }
 }
-$('btnShopClose').onclick = () => { shopMenu.style.display = 'none'; G.mode = 'playing'; };
+$('btnShopClose').onclick = () => { showOverlay(null); G.mode = 'playing'; };
 
 function pauseGame() {
   if (G.mode !== 'playing') return;
   G.mode = 'paused';
-  pauseMenu.style.display = 'flex';
+  showOverlay('pause');
   saveGame();
 }
 function gameOver(kind) {
@@ -378,6 +423,8 @@ function doInteract() {
   if (ent) { enterInterior(ent, player.pos); return; }
   const fac = nearestFacility(player.pos);
   if (fac) { openShop(fac); return; }
+  const jk = nearestJackable();
+  if (jk) { carjack(jk); onEnterCar(jk.car); return; }
   const car = nearestStealable();
   if (car) { enterCar(car); onEnterCar(car); }
 }
@@ -401,13 +448,13 @@ addEventListener('keydown', (e) => {
     else if (e.code === 'KeyR') startRace(player.pos);
     else if (e.code === 'KeyT') startTaxi();
     else if (e.code === 'KeyX') useSelected();
+    else if (e.code === 'KeyK') cycleRadio();
     else if (e.code === 'KeyV' && G.weapon === 'Sniper') G.scoped = !G.scoped;
     else if (/^Digit[1-5]$/.test(e.code)) doSelectSlot(parseInt(e.code.slice(5), 10) - 1);
   } else if (G.mode === 'paused' && (e.code === 'Escape' || e.code === 'KeyP')) {
     G.mode = 'playing';
-    pauseMenu.style.display = 'none'; mapMenu.style.display = 'none';
-    questMenu.style.display = 'none'; controlsMenu.style.display = 'none';
-  } else if (G.mode === 'shop' && e.code === 'Escape') { shopMenu.style.display = 'none'; G.mode = 'playing'; }
+    showOverlay(null);
+  } else if (G.mode === 'shop' && e.code === 'Escape') { showOverlay(null); G.mode = 'playing'; }
   else if (G.mode === 'title' && e.code === 'KeyS') showStats();
 });
 addEventListener('keyup', (e) => { G.keys[e.code] = false; });
@@ -415,6 +462,32 @@ addEventListener('mousemove', (e) => {
   if (G.mode !== 'playing') return;
   if (e.buttons || document.pointerLockElement) orbitCamera(e.movementX || 0, e.movementY || 0);
 });
+// Touch orbit: a touch drag on the canvas orbits the camera through the
+// exact same orbitCamera() the mouse uses — orbitCamera offsets
+// G.camYaw/G.camPitch and holds the auto-follow off briefly (dragHold), so
+// a manual orbit holds while the lead is still and the follow re-engages
+// as the lead turns, identical to the mouse. Mouse pointers are ignored
+// here (the mousemove handler above owns them). The joystick (#joy) and
+// the RUN/E/F/X buttons are separate DOM elements above the canvas, so
+// touches that start on them never fire canvas pointer events — no other
+// exclusion zones are needed.
+(function initTouchOrbit() {
+  const el = renderer.domElement;
+  let pid = null, lastX = 0, lastY = 0;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || G.mode !== 'playing' || pid !== null) return;
+    pid = e.pointerId; lastX = e.clientX; lastY = e.clientY;
+    try { el.setPointerCapture(pid); } catch (err) { /* capture is best-effort */ }
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pid) return;
+    orbitCamera(e.clientX - lastX, e.clientY - lastY);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  const end = (e) => { if (e.pointerId === pid) pid = null; };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+})();
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mousedown', (e) => {
   if (G.mode === 'playing' && e.target === renderer.domElement) {
@@ -428,8 +501,13 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
-// Virtual joystick: drag sets WASD-style keys; buttons fire the same actions
-// as the keyboard, including the hold-to-sprint RUN button (G.sprintTouch).
+// Virtual joystick: ANALOG — it publishes a continuous vector on
+// G.joyVec and player.js reads direction + magnitude from it. (It used
+// to threshold the stick into WASD keys at 0.35, so a thumb hovering
+// near the threshold flickered A/D on and off and the walk veered
+// constantly.) While driving, the legacy key mapping stays, because
+// driving.js steers from the keys. Buttons fire the same actions as
+// the keyboard, including the hold-to-sprint RUN button (G.sprintTouch).
 (function initJoystick() {
   const base = $('joy'), knob = $('joyKnob');
   let pid = null;
@@ -439,7 +517,7 @@ addEventListener('resize', () => {
   };
   base.addEventListener('pointerdown', (e) => { pid = e.pointerId; base.setPointerCapture(pid); move(e); });
   base.addEventListener('pointermove', (e) => { if (e.pointerId === pid) move(e); });
-  const end = () => { pid = null; knob.style.transform = 'translate(-50%,-50%)'; setKeys(0, 0); };
+  const end = () => { pid = null; knob.style.transform = 'translate(-50%,-50%)'; G.joyVec.x = 0; G.joyVec.y = 0; setKeys(0, 0); };
   base.addEventListener('pointerup', end);
   base.addEventListener('pointercancel', end);
   function move(e) {
@@ -448,8 +526,10 @@ addEventListener('resize', () => {
     const l = Math.hypot(dx, dy);
     if (l > 1) { dx /= l; dy /= l; }
     knob.style.transform = 'translate(calc(-50% + ' + dx * 34 + 'px), calc(-50% + ' + dy * 34 + 'px))';
-    setKeys(dx, dy);
+    G.joyVec.x = dx; G.joyVec.y = dy;
+    if (G.driving) setKeys(dx, dy);
   }
+  $('joyRadio').onclick = () => { if (G.mode === 'playing') cycleRadio(); };
   $('joyE').onclick = () => { if (G.mode === 'playing') doInteract(); };
   $('joyF').onclick = () => { if (G.mode === 'playing') doPunch(); };
   $('joyX').onclick = () => { if (G.mode === 'playing') useSelected(); };
@@ -512,7 +592,7 @@ function checkPickups() {
 }
 
 // ---- The frame loop --------------------------------------------------------------
-let last = performance.now(), titleAngle = 0, fpsCount = 0, fpsTime = 0, prevHealth = 100, renderAcc = 0;
+let last = performance.now(), titleAngle = 0, fpsCount = 0, fpsTime = 0, prevHealth = 100, renderAcc = 0, clubModeOn = false;
 window.__fps = 0;
 function frame(now) {
   requestAnimationFrame(frame);
@@ -538,6 +618,10 @@ function frame(now) {
     camera.updateProjectionMatrix();
   }
   $('scope').style.display = G.scoped && G.weapon === 'Sniper' && G.mode === 'playing' ? 'block' : 'none';
+  enforceChrome();
+  // Club mode: inside CLUB NEON PALMS the radio is the club's music.
+  const inClub = G.interior === 'club';
+  if (inClub !== clubModeOn) { clubModeOn = inClub; radio.setClubMode(inClub); }
 
   if (G.mode === 'title' || (G.mode === 'stats' && G.prevMode === 'title')) {
     titleAngle += dt * 0.07;
@@ -589,9 +673,11 @@ function frame(now) {
       else if (!G.driving) {
         const ent = nearestInterior(player.pos);
         const fac = nearestFacility(player.pos);
+        const jk = nearestJackable();
         const car = nearestStealable();
         G.prompt = ent ? 'Press E to enter ' + ent.name
           : fac ? 'Press E to enter ' + fac.name
+          : jk ? 'Press E to carjack the ' + jk.name
           : car ? 'Press E to steal the ' + car.name : '';
       } else G.prompt = sidePrompt(player.pos) || 'Press E to exit · R race (Marina Mile) · T taxi fare';
     }
@@ -601,8 +687,9 @@ function frame(now) {
 }
 
 window.__game = {
-  G, player, startPlaying, renderer, scene, camera, cops, parkedCars, trafficCars, peds,
-  fireState, forceIgnite, computeEnding, settings,
+  G, player, startPlaying, renderer, scene, camera, cops, officers, parkedCars, trafficCars, peds,
+  commitCrime, nearestJackable, carjack,
+  fireState, forceIgnite, computeEnding, settings, radio,
   seedEnding: (patch) => { Object.assign(G.track, patch || {}); },
   finishFinale, gameOver,
   selectSlot: doSelectSlot, useSelected, addItem, buyItem, FACILITIES, replayFinale, payBail,
@@ -618,8 +705,9 @@ window.__game = {
   teleport: (x, z) => { player.pos.set(x, 0.3, z); if (G.driving) G.driving.pos.set(x, 0, z); },
 };
 stageShot(shot, () => startPlaying(false));
+if (window.__shotOverlay) showOverlay(window.__shotOverlay);
+if (shot === 'map') setTimeout(drawFullMap, 350);
 if (shot) {
-  if (shot !== 'title') { menu.style.display = 'none'; hud.style.display = 'block'; }
   setTimeout(() => { window.__shotReady = true; }, 600);
 }
 refreshSaveInfo();

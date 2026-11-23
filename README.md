@@ -8,6 +8,15 @@ Bounty page: https://make.fun/bounty/gta6-01
 
 A stylized **low-poly 3D open-world crime game** in the browser, set on a **long Florida peninsula at dusk** — sunset-gradient sky, warm low sun, neon waking up over pastel facades. Built with a vendored copy of Three.js (r128) that loads locally; nothing is fetched over the network at runtime, and every texture is generated on a canvas at boot (no external images).
 
+## What's new in this round
+
+- **Palm Boulevard rebuilt**: buildings now *front* the boulevard instead of backing onto it, with **Palm Plaza**, a **diagonal avenue**, and a **coastal promenade** along the water. **CLUB NEON PALMS** headlines the strip, and the facility storefronts — mart, pharmacy, gun shop, bank, jeweller, restaurant — carry proper signs and **working doors** you walk through.
+- **A built-in radio**: three synth stations, cycled with **K** or the touch **RADIO** button, pausable, with its own volume in Settings. The car is no longer silent.
+- **Touch, finished**: drag anywhere to **orbit the camera** on touch as well as mouse, plus a proper **analog joystick** — and the **minimap now sits at the top** of the screen where your eyes already are.
+- **Police with feet and eyes**: officers now pursue **on foot** as well as in cars, and wanted stars are **witness-based** — a crime nobody saw doesn't raise your heat; break line of sight and stay unseen and it cools.
+- **Carjacking, properly**: occupied vehicles — traffic, parked-with-driver, **even police cars** — can be jacked; the driver is pulled out and reacts like a person whose car was just stolen.
+- **The flyover is solid**: the Palm Flyover deck is a real surface end to end — you drive *on* it, not through it.
+
 ## Story
 
 Courier **Vera Solano** — or her partner **Dario "Dax" Vega**, your choice at New Game — owes a debt to fixer **Lucia Marrero** in the coastal city of Palm Cove. A New Game **wakes the chosen lead up in their own bed** at home in Coral Heights; Lucia's first message and the first mission marker only arrive once you step outside. Work the debt off across four story missions, and *how* you work decides the ending: debtors spared or taken out, money earned, busts on your record and side work all feed **six branching endings** — from *Clean Getaway* to *Kingpin of the Cove* to *Queen of the Ashes*. The finale is replayable from the pause menu, and unlocked endings are recorded in your save and stats.
@@ -65,6 +74,7 @@ Third-person, and it finally moves with you: **drag the mouse to orbit freely** 
 | R | Start the Causeway Run race (in a car, at the start) |
 | T | Start taxi work (in a car) |
 | B | Pay bail while in prison |
+| K | Radio: next station / off (touch: RADIO button) |
 | Esc or P | Pause / resume (quest log, map, stats, controls, settings, replay finale) |
 | S (on title) | Stats screen |
 
@@ -76,7 +86,7 @@ node serve.ts
 
 Then open http://localhost:8080 in a desktop browser. No build step and no install: `serve.ts` serves the `game/` folder as-is.
 
-Deterministic screenshot scenes are staged from URL parameters, e.g. `http://localhost:8080/?shot=chase&seed=1` (shots: `title` = character choice, `drive`, `chase`, `map`).
+Deterministic screenshot scenes are staged from URL parameters, e.g. `http://localhost:8080/?shot=chase&seed=1` (shots: `title` = the title menu, `drive`, `chase`, `map`).
 
 ## Source structure
 
@@ -101,7 +111,7 @@ game/
     facilities.js   menu facilities, prison, and the walk-in interiors: home + wake-up, houses, restaurant, jewelry, bank
     missions.js     story missions, dialogue choices, six endings, race, taxi, quest log data + tracking
     hud.js          GTA-register HUD, hotbar, local minimap + Florida-silhouette full map (HOME marker)
-    audio.js        WebAudio synth sound effects (settings-driven master gain)
+    audio.js        WebAudio synth sound effects + the 3-station radio (settings-driven gains)
     save.js         localStorage save slot (progress, inventory, endings, character)
     shots.js        deterministic ?shot= staging for screenshots
     main.js         boot, state machine, game loop, tutorial, quest log + controls wiring, settings/joystick wiring

@@ -18,6 +18,7 @@
 // room's own walls and furniture (city.setRoomColliders), leaving restores
 // both. From the gameplay camera the room reads as a furnished interior.
 import { G } from './state.js';
+import { SITES, HOSPITAL, ROADS, ROAD_W } from './config.js';
 import { colliders, setRoomColliders } from './city.js';
 import { addItem, ITEM_DEFS } from './inventory.js';
 import { commitCrime } from './police.js';
@@ -38,29 +39,84 @@ function signTex(text, fg, bg) {
 const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
 export const PRISON = { x: -168, z: -262, hw: 30, hd: 24, gate: { x: -168, z: -236 } };
+// Facility positions come from SITES in config.js: every storefront now
+// stands on the Palm Boulevard (the z=0 spine) in a proper lot — fronting
+// the road, door on the street side, never on the road surface. (The old
+// scatter put SOLANO GAS across the x=150 road and APOTIK SEHAT eating
+// 2.5 units of the x=75 road, with their doors buried mid-block.)
 export const FACILITIES = [
-  { id: 'mart', name: 'COVE MART 24H', x: 30, z: 88, color: 0x27ae60, sign: '#7ef0d4', shop: [{ item: 'snack', price: 15 }, { item: 'cola', price: 8 }] },
-  { id: 'apotik', name: 'APOTIK SEHAT', x: 88, z: -34, color: 0xf5f6fa, sign: '#2ed573', shop: [{ item: 'medkit', price: 60 }, { item: 'snack', price: 20 }] },
-  { id: 'arms', name: 'MARLIN ARMS', x: -34, z: -88, color: 0x57606f, sign: '#ffd32a', shop: [{ item: 'ammo', price: 40 }, { item: 'armour', price: 120 }] },
-  { id: 'gas', name: 'SOLANO GAS', x: 152, z: 34, color: 0xe67e22, sign: '#ffe9a8', shop: [{ item: 'cola', price: 8 }] },
-  { id: 'bank', name: 'COVE BANK · ATM', x: -18, z: 20, color: 0x8e9aaf, sign: '#ffffff', shop: [] },
+  { id: 'mart', name: 'COVE MART 24H', ...SITES.mart, color: 0x27ae60, sign: '#7ef0d4', shop: [{ item: 'snack', price: 15 }, { item: 'cola', price: 8 }] },
+  { id: 'apotik', name: 'APOTIK SEHAT', ...SITES.apotik, color: 0xf5f6fa, sign: '#2ed573', shop: [{ item: 'medkit', price: 60 }, { item: 'snack', price: 20 }] },
+  { id: 'arms', name: 'MARLIN ARMS', ...SITES.arms, color: 0x57606f, sign: '#ffd32a', shop: [{ item: 'ammo', price: 40 }, { item: 'armour', price: 120 }] },
+  { id: 'gas', name: 'SOLANO GAS', ...SITES.gas, color: 0xe67e22, sign: '#ffe9a8', shop: [{ item: 'cola', price: 8 }] },
+  { id: 'bank', name: 'COVE BANK · ATM', ...SITES.bank, color: 0x8e9aaf, sign: '#ffffff', shop: [] },
 ];
+// Named places for the map screen's PLACES list — filled by buildFacilities.
+export const PLACES = [];
+const HINTS = {
+  mart: 'Palm Boulevard · south side', apotik: 'Palm Boulevard · south side', arms: 'Palm Boulevard · north side',
+  gas: 'Palm Boulevard · south side, east end', bank: 'Palm Boulevard · north side', bankin: 'Palm Boulevard · north side',
+  club: 'Palm Boulevard · north side', jewels: 'Palm Boulevard · north side', kitchen: 'Palm Boulevard · south side',
+  surf: 'Palm Boulevard · south side, west end', books: 'Palm Boulevard · south side', decoFlats: 'Palm Boulevard · north side',
+  blvdFlats: 'Palm Boulevard · north side', hospital: 'Coral Heights · fronting the z=-75 road',
+  home: 'Coral Heights · on the mid street', house1: 'Coral Heights', house2: 'Old Town', food: 'Palm Boulevard · south side',
+};
 // The lead's home: a Coral Heights house, a short walk from spawn.
 export const HOME = { x: 118, z: -48 };
 
-function clearPlot(x, z, r) {
+// Remove ONLY the colliders that actually overlap this building's own
+// footprint. The old radius version deleted the colliders of every city
+// building within 16 units — their meshes stayed, so players walked
+// straight through the neighbours of every facility. city.js now reserves
+// these plots before placing anything, so this is a backstop that should
+// never fire.
+function clearPlot(x, z, hw, hd) {
   for (let ci = colliders.length - 1; ci >= 0; ci--) {
-    if (Math.hypot(colliders[ci].x - x, colliders[ci].z - z) < r) colliders.splice(ci, 1);
+    const c = colliders[ci];
+    if (Math.abs(c.x - x) < c.hw + hw + 0.6 && Math.abs(c.z - z) < c.hd + hd + 0.6) colliders.splice(ci, 1);
   }
 }
-function exterior(scene, x, z, w, h, d, color, label, fg) {
-  clearPlot(x, z, 16);
+// A storefront exterior: the box, its sign, a MODELLED DOOR on the street
+// face (recessed dark frame, contrasting panel, step, canopy), and a paved
+// forecourt filling the gap between the face and the road band edge, so
+// every facility reads as a lot fronting its street. `face` is the side
+// the door, sign and forecourt sit on: 's' = +z, 'n' = −z. The returned
+// door point stands 2.2 units off the face — outside the building's own
+// collider (player radius 0.7), so the interact trigger is reachable.
+function exterior(scene, x, z, w, h, d, color, label, fg, face = 's') {
+  clearPlot(x, z, w / 2, d / 2);
+  const dir = face === 'n' ? -1 : 1;
   const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
   b.position.set(x, h / 2, z); scene.add(b);
   colliders.push({ x, z, hw: w / 2, hd: d / 2 });
+  const faceZ = z + dir * (d / 2);
   const s = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.85, 3.2), new THREE.MeshBasicMaterial({ map: signTex(label, fg, '#14101f'), side: THREE.DoubleSide }));
-  s.position.set(x, h - 1.2, z + d / 2 + 0.2); scene.add(s);
-  return { x, z: z + d / 2 + 2.2 };
+  s.position.set(x, h - 1.2, faceZ + dir * 0.2);
+  if (dir < 0) s.rotation.y = Math.PI;
+  scene.add(s);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(3.6, 4.8, 0.5), mat(0x14161c));
+  frame.position.set(x, 2.4, faceZ + dir * 0.18); scene.add(frame);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(2.5, 4.1, 0.26), mat(0x1f6f8b));
+  panel.position.set(x, 2.05, faceZ + dir * 0.38); scene.add(panel);
+  const step = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.25, 1.7), mat(0x8e9aaf));
+  step.position.set(x, 0.12, faceZ + dir * 1.15); scene.add(step);
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(w * 0.55, 0.18, 2.6), mat(0xd64570));
+  canopy.position.set(x, h * 0.55, faceZ + dir * 1.25); canopy.rotation.x = dir * 0.16; scene.add(canopy);
+  // Forecourt: from the face to the nearest road band edge along the
+  // facing axis, when there is a real gap to pave (skipped when the door
+  // already opens onto a street edge, like HOME's mid street).
+  let edge = null;
+  for (const r of ROADS) {
+    const e = dir > 0 ? r - ROAD_W / 2 : r + ROAD_W / 2; // near band edge of each z-road, in the facing direction
+    if ((e - faceZ) * dir > 0 && (edge === null || (e - edge) * dir < 0)) edge = e;
+  }
+  const gap = edge === null ? 0 : (edge - faceZ) * dir;
+  if (gap >= 2.5 && gap <= 30) {
+    const fc = new THREE.Mesh(new THREE.PlaneGeometry(w + 6, gap), mat(0x9a8f7a));
+    fc.rotation.x = -Math.PI / 2;
+    fc.position.set(x, 0.045, faceZ + dir * gap / 2); scene.add(fc);
+  }
+  return { x, z: faceZ + dir * 2.2 };
 }
 
 // ---- Walk-in rooms ---------------------------------------------------------
@@ -110,10 +166,14 @@ let homeEnt = null, homeBed = null, homeStand = null;
 
 export function buildFacilities(scene) {
   for (const f of FACILITIES) {
-    f.door = exterior(scene, f.x, f.z, 16, 8, 12, f.color, f.name, f.sign);
+    if (f.id === 'apotik') continue; // APOTIK is a walk-in enterable — buildInteriors builds its exterior and shares the door
+    f.door = exterior(scene, f.x, f.z, 16, 8, 12, f.color, f.name, f.sign, f.face);
   }
   buildInteriors(scene);
   buildPrison(scene);
+  PLACES.length = 0;
+  for (const f of FACILITIES) PLACES.push({ name: f.name, hint: HINTS[f.id] || '' });
+  for (const e of ENTERABLES) if (!PLACES.some((p) => p.name === e.name)) PLACES.push({ name: e.name, hint: HINTS[e.id] || '' });
 }
 
 function buildPrison(scene) {
@@ -137,8 +197,8 @@ function buildPrison(scene) {
 function buildInteriors(scene) {
   // Two rentable houses: sofa, TV, a bed, a table — lived-in, simply.
   const houseDefs = [
-    { id: 'house1', name: 'MAPLE HOUSE', x: 152, z: -128, color: 0xffe8c8 },
-    { id: 'house2', name: 'PALMETTO APARTMENTS', x: -128, z: -158, color: 0xd98c68 },
+    { id: 'house1', name: 'MAPLE HOUSE', x: 133, z: -128, color: 0xffe8c8 }, // was (152,-128): the box sat across the x=150 road
+    { id: 'house2', name: 'PALMETTO APARTMENTS', x: -128, z: -166, color: 0xd98c68 }, // was (-128,-158): the box sat across the z=-150 road, door on the asphalt
   ];
   for (const hd of houseDefs) {
     const door = exterior(scene, hd.x, hd.z, 14, 6, 11, hd.color, hd.name, '#7ef0d4');
@@ -153,7 +213,7 @@ function buildInteriors(scene) {
     enterable(scene, { id: hd.id, name: hd.name, kind: 'house' }, door, room);
   }
   { // PALM KITCHEN restaurant: tables and chairs, a counter to order at.
-    const door = exterior(scene, -52, 118, 16, 7, 12, 0xe67e22, 'PALM KITCHEN', '#ffe9a8');
+    const door = exterior(scene, SITES.kitchen.x, SITES.kitchen.z, 16, 7, 12, 0xe67e22, 'PALM KITCHEN', '#ffe9a8', SITES.kitchen.face);
     const room = makeRoom(scene, 22, 16, 0x9c6644, 0xf5e6d3);
     for (const [tx, tz] of [[-6, -3], [0, -3.5], [6, -3], [-3, 2.5], [3.5, 2.5]]) {
       room.furn(tx, tz, 2.2, 0.85, 2.2, 0xf5f6fa);      // table
@@ -166,7 +226,7 @@ function buildInteriors(scene) {
     e.counter = { x: counter.position.x, z: counter.position.z };
   }
   { // MARLIN & CO. JEWELS: three glass cases with something shiny inside.
-    const door = exterior(scene, 24, -28, 15, 7, 11, 0x273c75, 'MARLIN & CO. JEWELS', '#7ef0d4');
+    const door = exterior(scene, SITES.jewels.x, SITES.jewels.z, 15, 7, 11, 0x273c75, 'MARLIN & CO. JEWELS', '#7ef0d4', SITES.jewels.face);
     const room = makeRoom(scene, 20, 14, 0x2f3542, 0xdfe6e9);
     const cases = [];
     for (const cx of [-5.5, 0, 5.5]) {
@@ -226,6 +286,99 @@ function buildInteriors(scene) {
     homeStand = { x: bed.position.x + 2.6, z: bed.position.z + 0.5 };
     homeEnt.bed = homeBed;
   }
+  { // HOSPITAL: a walk-in lobby on its Coral Heights lot — reception
+    // counter (F = treatment), waiting benches, a red-cross wall sign.
+    // The old hospital was a blank city.js box across the x=75/z=-75
+    // junction with no door at all; this is its named replacement.
+    const door = exterior(scene, HOSPITAL.x, HOSPITAL.z, 22, 11, 16, 0xf5f6fa, 'HOSPITAL', '#ff3838', 'n');
+    const room = makeRoom(scene, 22, 15, 0xb8a89a, 0xeef2f5);
+    const counter = room.furn(0, -5.8, 11, 1.15, 1.2, 0x8e9aaf);
+    room.furn(-6, 2.5, 3.6, 0.8, 1.6, 0x7f5539);          // waiting benches
+    room.furn(6, 2.5, 3.6, 0.8, 1.6, 0x7f5539);
+    room.furn(-9.5, -6.2, 2.2, 2.2, 0.9, 0xdfe6e9);       // cabinet
+    room.sign(0, -7.2, 'HOSPITAL · RECEPTION', '#ff3838', 12);
+    const e = enterable(scene, { id: 'hospital', name: 'HOSPITAL', kind: 'hospital' }, door, room);
+    e.counter = { x: counter.position.x, z: counter.position.z };
+  }
+  { // APOTIK SEHAT: walk-in pharmacy — shelves and a counter where F buys
+    // the same stock its shop menu always sold. Its FACILITIES entry keeps
+    // pointing at this same door.
+    const s = SITES.apotik;
+    const door = exterior(scene, s.x, s.z, 16, 8, 12, 0xf5f6fa, 'APOTIK SEHAT', '#2ed573', s.face);
+    const fac = FACILITIES.find((f) => f.id === 'apotik');
+    if (fac) fac.door = door;
+    const room = makeRoom(scene, 18, 13, 0x9ab8a0, 0xeef5ee);
+    for (const sx of [-6, -2.5, 2.5, 6]) room.furn(sx, -3.5, 2.6, 2, 0.9, 0xdfe6e9); // shelves
+    const counter = room.furn(0, -5.6, 10, 1.15, 1.2, 0x8e9aaf);
+    room.furn(5.5, 3, 3, 0.8, 1.4, 0x7f5539);             // waiting bench
+    room.sign(0, -6.2, 'APOTIK SEHAT · PHARMACY', '#2ed573', 12);
+    const e = enterable(scene, { id: 'apotik', name: 'APOTIK SEHAT', kind: 'apotik' }, door, room);
+    e.counter = { x: counter.position.x, z: counter.position.z };
+  }
+  { // CLUB NEON PALMS — the nightclub on the boulevard strip.
+    // CLUB kind flag for the backsound stage: the radio should be audible
+    // inside this room (club music source); wire it by matching kind/id
+    // 'club' in ENTERABLES.
+    const s = SITES.club;
+    const door = exterior(scene, s.x, s.z, 18, 9, 12, 0x2a1a3e, 'CLUB NEON PALMS', '#ff5da2', s.face);
+    const room = makeRoom(scene, 24, 16, 0x1c1030, 0x3a2358);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(11, 8), new THREE.MeshBasicMaterial({ color: 0xff5da2 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.set(room.cx, 0.06, room.cz + 1); scene.add(floor);
+    const bar = room.furn(-8.5, -5.5, 2.2, 1.15, 8, 0x57606f);   // bar counter along the west wall
+    for (const sz of [-6.5, -3.5, -0.5, 2.5]) room.furn(-6.6, sz, 0.7, 0.9, 0.7, 0xd63031); // stools
+    room.furn(8.5, -6, 3.4, 0.9, 1.6, 0x14161c);                 // DJ booth
+    room.sign(0, -7.6, 'CLUB NEON PALMS · DANCE', '#ff5da2', 13);
+    const e = enterable(scene, { id: 'club', name: 'CLUB NEON PALMS', kind: 'club' }, door, room);
+    e.bar = { x: bar.position.x, z: bar.position.z };
+    e.animT = 0;
+    e.dancers = [];
+    const skins = [0xf1c27d, 0xe0ac69, 0x8d5524, 0xffdbac];
+    for (let i = 0; i < 4; i++) {
+      const d = makeDancer(skins[i], [0xff5da2, 0x7ef0d4, 0xffd32a, 0x54a0ff][i]);
+      d.position.set(room.cx - 3.5 + i * 2.3, 0, room.cz + 1 + (i % 2) * 2.4 - 1.2);
+      scene.add(d);
+      e.dancers.push({ mesh: d, phase: i * 1.7 });
+    }
+  }
+  // Ordinary boulevard frontage you can walk into: two shops, two flats.
+  const extras = [
+    { id: 'surf', name: 'SURF SHACK', kind: 'shop', color: 0x2ec4b6, sign: '#ffe9a8' },
+    { id: 'books', name: 'COVE BOOKS', kind: 'shop', color: 0xe8b4b8, sign: '#7ef0d4' },
+    { id: 'decoFlats', name: 'DECO FLATS', kind: 'flat', color: 0xfec8a0, sign: '#ff5da2' },
+    { id: 'blvdFlats', name: 'BOULEVARD FLATS', kind: 'flat', color: 0xa0e8dd, sign: '#ffd32a' },
+  ];
+  for (const xd of extras) {
+    const s = SITES[xd.id];
+    const door = exterior(scene, s.x, s.z, 14, 7, 11, xd.color, xd.name, xd.sign, s.face);
+    const room = makeRoom(scene, 18, 13, 0xb08968, 0xe6ddcb);
+    if (xd.kind === 'shop') {
+      for (const sx of [-5.5, 0, 5.5]) room.furn(sx, -3.5, 3, 1.9, 0.9, 0xdfe6e9); // shelves
+      room.furn(0, -5.6, 9, 1.15, 1.2, 0x7f5539);                                  // counter
+    } else {
+      room.furn(-5.5, -4, 4.4, 0.9, 2, 0x7f5539);       // sofa
+      room.furn(5.5, -4.5, 3, 0.8, 4.6, 0xf5f6fa);      // bed
+      room.furn(4.5, 3.5, 3.2, 0.85, 2, 0x8d6e63);      // table
+    }
+    room.sign(0, -6.2, xd.name, xd.sign, 11);
+    enterable(scene, { id: xd.id, name: xd.name, kind: xd.kind }, door, room);
+  }
+}
+
+// A simple club dancer: torso, head, arms up — bounced and swayed by
+// updateInteriors while the player is inside the club.
+function makeDancer(skin, shirt) {
+  const g = new THREE.Group();
+  const legs = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.9, 0.4), mat(0x2f3542));
+  legs.position.y = 0.45; g.add(legs);
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.45), mat(shirt));
+  torso.position.y = 1.32; g.add(torso);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), mat(skin));
+  head.position.y = 2.05; g.add(head);
+  for (const sx of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.75, 0.2), mat(shirt));
+    arm.position.set(sx * 0.55, 1.95, 0); arm.rotation.z = sx * -0.7; g.add(arm);
+  }
+  return g;
 }
 
 // ---- Entering, leaving, and using interiors --------------------------------
@@ -237,8 +390,14 @@ export function nearestInterior(pos) {
   for (const e of ENTERABLES) if (Math.hypot(pos.x - e.door.x, pos.z - e.door.z) < 4.2) return e;
   return null;
 }
-export function enterInterior(e, playerPos) {
-  e.returnPos = { x: playerPos.x, z: playerPos.z };
+export function enterInterior(e, playerPos, returnPosOverride) {
+  // Normal entries return the player to where they stood at the door. The
+  // wake-up opening passes an explicit override: the player is teleported
+  // into the room from elsewhere, so the recorded return point must be the
+  // building's exterior door, not the pre-teleport position.
+  e.returnPos = returnPosOverride
+    ? { x: returnPosOverride.x, z: returnPosOverride.z }
+    : { x: playerPos.x, z: playerPos.z };
   G.interior = e.id;
   setRoomColliders(e.room.colliders);
   playerPos.set(e.room.spawn.x, 0.3, e.room.spawn.z);
@@ -262,6 +421,22 @@ export function updateInteriors(dt, playerPos, sayFn) {
   if (Math.hypot(playerPos.x - e.room.doorIn.x, playerPos.z - e.room.doorIn.z) < 1.5) {
     exitInterior(playerPos);
     return '';
+  }
+  if (e.kind === 'club' && e.dancers) { // the floor is alive: bounce + sway
+    e.animT = (e.animT || 0) + dt;
+    for (const d of e.dancers) {
+      const b = Math.abs(Math.sin(e.animT * 3.4 + d.phase));
+      d.mesh.position.y = b * 0.28;
+      d.mesh.rotation.y = Math.sin(e.animT * 1.7 + d.phase) * 0.45;
+      d.mesh.rotation.z = Math.sin(e.animT * 3.4 + d.phase) * 0.08;
+    }
+    return 'CLUB NEON PALMS — the DJ is mid-set. Walk through the front door to leave';
+  }
+  if (e.kind === 'hospital' && Math.hypot(playerPos.x - e.counter.x, playerPos.z - e.counter.z) < 3.2) {
+    return 'Press F for treatment — $25, restores full health';
+  }
+  if (e.kind === 'apotik' && Math.hypot(playerPos.x - e.counter.x, playerPos.z - e.counter.z) < 3.2) {
+    return 'Press F to buy — Medkit $60, Snack $20';
   }
   // Context prompts for the room's usable spots.
   if (e.kind === 'home' && Math.hypot(playerPos.x - e.bed.x, playerPos.z - e.bed.z) < 3) {
@@ -316,6 +491,23 @@ export function tryInteriorAction(playerPos, sayFn) {
     }
     return false;
   }
+  if (e.kind === 'hospital' && near(e.counter, 3.2)) {
+    if (G.health >= 100) { sayFn && sayFn('Reception', 'You are in perfect health. The doctor sends her regards.', 3); return true; }
+    if (G.money < 25) { sfx.fail(); sayFn && sayFn('Reception', 'Treatment is $25. The waiting room chairs are free.', 3); return true; }
+    G.money -= 25;
+    G.health = 100;
+    sfx.cash();
+    sayFn && sayFn('Hospital', 'Patched up and cleared. Full health restored. (-$25)', 4);
+    saveGame();
+    return true;
+  }
+  if (e.kind === 'apotik' && near(e.counter, 3.2)) {
+    if (G.money >= 60 && addItem('medkit')) { G.money -= 60; sfx.cash(); sayFn && sayFn('Apotik Sehat', 'One medkit. Take care out there. (-$60)', 3); saveGame(); return true; }
+    if (G.money >= 20 && addItem('snack')) { G.money -= 20; sfx.cash(); sayFn && sayFn('Apotik Sehat', 'One snack. Anything else? (-$20)', 3); saveGame(); return true; }
+    sfx.fail();
+    sayFn && sayFn('Apotik Sehat', 'Medkit $60, snack $20 — or your bag is full.', 3);
+    return true;
+  }
   if (e.kind === 'bank' && near(e.atm, 2.8)) {
     G.bankVault = G.bankVault || 0;
     if (G.money >= 50) {
@@ -344,7 +536,7 @@ export function tryInteriorAction(playerPos, sayFn) {
 let wake = null; // {t, player}
 export function startWakeUp(player) {
   if (!homeEnt) return;
-  enterInterior(homeEnt, player.pos);
+  enterInterior(homeEnt, player.pos, homeEnt.door);
   player.pos.set(homeBed.x, 0.95, homeBed.z);
   player.mesh.rotation.x = -Math.PI / 2; // asleep, flat on the bed
   wake = { t: 2.6, player };

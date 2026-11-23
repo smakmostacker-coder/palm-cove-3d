@@ -10,14 +10,15 @@
 // around a tree instead of ghosting through it.
 import { ROADS, FIRE_STATION, POLICE_STATION } from './config.js';
 import { makeRng, pick } from './random.js';
-import { makeVehicle, LIGHT, groundHeightAt, collideBuildings, NORTH_END } from './city.js';
+import { makeVehicle, LIGHT, groundHeightFor, collideBuildings, NORTH_END } from './city.js';
+import { peds } from './pedestrians.js';
 
 const COLORS = [0xe74c3c, 0x3498db, 0xf1c40f, 0x9b59b6, 0xe67e22, 0x1abc9c, 0xecf0f1, 0xfd79a8];
 export const trafficCars = [];  // {mesh,pos,axis,line,t,dir,speed,health,kind,burning,burnt,...}
 export const parkedCars = [];   // {mesh,pos,angle,health,speed,kind,name,...}
 
 function veh(mesh, kind, name) {
-  return { mesh, pos: mesh.position, kind, name, health: 100, speed: 0, burning: 0, burnt: false, burnT: 0, sprayed: 0 };
+  return { mesh, pos: mesh.position, kind, name, health: 100, speed: 0, curSpeed: 0, burning: 0, burnt: false, burnT: 0, sprayed: 0 };
 }
 
 export function buildTraffic(scene, seed) {
@@ -55,7 +56,7 @@ export function buildTraffic(scene, seed) {
   // spread across the districts, the stations, the Keys and the far north.
   const spots = [
     { x: 8, z: 48, angle: Math.PI, kind: 'car' }, { x: 7, z: 22, angle: 0, kind: 'car' },
-    { x: -71, z: -30, angle: Math.PI / 2, kind: 'car' }, { x: 79, z: 40, angle: -Math.PI / 2, kind: 'car' },
+    { x: -71, z: -30, angle: Math.PI / 2, kind: 'car' }, { x: 79, z: 22, angle: -Math.PI / 2, kind: 'car' },
     { x: -146, z: 90, angle: 0, kind: 'car' }, { x: 40, z: -71, angle: Math.PI / 2, kind: 'car' },
     { x: -30, z: 154, angle: Math.PI / 2, kind: 'car' }, { x: 154, z: -90, angle: 0, kind: 'car' },
     { x: -79, z: -120, angle: Math.PI / 2, kind: 'car' }, { x: 120, z: 79, angle: -Math.PI / 2, kind: 'car' },
@@ -96,16 +97,21 @@ export function updateTraffic(dt, playerPos) {
       }
     }
     const sp = c.stopped > 0 || c.burning || atRed ? 0 : c.speed;
+    c.curSpeed = sp;
     c.t += sp * c.dir * dt;
     const lo = c.highway ? NORTH_END + 60 : -195, hi = c.highway ? -230 : 195;
     if (c.t > hi) c.t = lo;
     if (c.t < lo) c.t = hi;
     const lane = c.dir > 0 ? 3.2 : -3.2;
+    // Stateful surface per car (the axis hint only seeds the first
+    // sample inside a band): a deck-route car stays on the deck for the
+    // whole crossing and a street-route car stays underneath — neither
+    // can wedge half-buried inside the structure.
     if (c.axis === 'x') {
-      c.mesh.position.set(c.t, groundHeightAt(c.t, c.line + lane, 'x'), c.line + lane);
+      c.mesh.position.set(c.t, groundHeightFor(c, c.t, c.line + lane, 'x'), c.line + lane);
       c.mesh.rotation.y = c.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
     } else {
-      c.mesh.position.set(c.line + lane, groundHeightAt(c.line + lane, c.t, 'z'), c.t);
+      c.mesh.position.set(c.line + lane, groundHeightFor(c, c.line + lane, c.t, 'z'), c.t);
       c.mesh.rotation.y = c.dir > 0 ? Math.PI : 0;
     }
     collideBuildings(c.mesh.position, 1.4); // buildings and props are solid
@@ -117,4 +123,28 @@ export function updateTraffic(dt, playerPos) {
 
 export function allVehicles() {
   return trafficCars.concat(parkedCars.filter((p) => !p.taken));
+}
+
+// Carjacking: the driver of an occupied traffic vehicle is pulled out at
+// his own door and becomes a pedestrian on the street. The driver is
+// played by a pooled ped taken from far away (never one on screen, never
+// a flagged taxi fare); it is re-routed onto the nearest sidewalk so it
+// can flee from the thief and then stroll off like anyone else.
+export function ejectDriver(c) {
+  let best = null, bd = -1;
+  for (const p of peds) {
+    if (p.flagged || p.down > 0) continue;
+    const d = p.mesh.position.distanceTo(c.pos);
+    if (d > bd) { bd = d; best = p; }
+  }
+  if (!best) return null;
+  const ry = c.mesh.rotation.y, fx = Math.sin(ry), fz = Math.cos(ry);
+  const px = c.pos.x + fz * 2.1, pz = c.pos.z - fx * 2.1; // the driver's side
+  best.mesh.position.set(px, 0.3, pz);
+  const line = ROADS.reduce((a, r) => (Math.abs(r - pz) < Math.abs(a - pz) ? r : a), ROADS[0]);
+  best.axis = 'x'; best.line = line; best.side = pz >= line ? 1 : -1;
+  best.t = Math.max(-195, Math.min(195, px)); best.dir = 1;
+  best.fleeFrom = { x: c.pos.x, z: c.pos.z };
+  best.flee = 2.4; best.down = 0;
+  return best;
 }

@@ -82,7 +82,7 @@ function explode(f, playerPos) {
   charVehicle(v);
   if (sceneRef) sceneRef.remove(f.group);
   sfx.boom();
-  commitCrime(Math.min(5, Math.max(3, G.wanted)), 'Vehicle explosion');
+  commitCrime(Math.min(5, Math.max(3, G.wanted)), 'Vehicle explosion', { pos: v.pos });
   for (const o of allVehicles()) {
     if (o === v || o.burnt) continue;
     if (o.pos.distanceTo(v.pos) < 10) {

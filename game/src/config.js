@@ -42,9 +42,30 @@ export function districtAt(x, z) {
 // Downtown core: the tallest towers cluster around the central boulevard cross.
 export function isDowntown(x, z) { return Math.abs(x) < 58 && Math.abs(z) < 58; }
 
+// Storefront sites on the Palm Boulevard (the z=0 east–west spine): every
+// shop, service and club exterior in the south fronts this street. `face`
+// is the side the door and sign sit on — 's' faces +z (buildings north of
+// the boulevard), 'n' faces −z (buildings south of it). facilities.js reads
+// its positions from here and city.js reserves these plots when it lays out
+// the street walls, so the two never disagree about where a shop stands.
+export const SITES = {
+  bank:      { x: -100, z: -17, face: 's' },
+  arms:      { x: -52,  z: -17, face: 's' },
+  club:      { x: -20,  z: -17, face: 's' },
+  jewels:    { x: 24,   z: -17, face: 's' },
+  decoFlats: { x: 56,   z: -17, face: 's' },
+  blvdFlats: { x: 116,  z: -17, face: 's' },
+  surf:      { x: -128, z: 17,  face: 'n' },
+  mart:      { x: -96,  z: 17,  face: 'n' },
+  apotik:    { x: -32,  z: 17,  face: 'n' },
+  kitchen:   { x: 30,   z: 17,  face: 'n' },
+  books:     { x: 94,   z: 17,  face: 'n' },
+  gas:       { x: 128,  z: 17,  face: 'n' },
+};
+
 export const SPAWN = { x: 8, z: 58 };
 export const POLICE_STATION = { x: -68, z: -68 };
-export const HOSPITAL = { x: 68, z: -68 };
+export const HOSPITAL = { x: 97, z: -56 }; // Coral Heights lot fronting the z=-75 road, door at (97,-66.2) (was {68,-68}: the old box straddled the x=75/z=-75 junction and blocked both roads)
 export const FIRE_STATION = { x: 150, z: -150 }; // Coral Heights fire station
 export const GARAGE = { x: 82, z: 82 }; // the lead's garage, Marina Mile
 export const MARINA = { x: 170, z: 170 };

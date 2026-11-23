@@ -11,11 +11,11 @@
 // the crash callback — a car never ghosts through a tree.
 import { G } from './state.js';
 import { HANDLING } from './config.js';
-import { collideBuildings, collideProps, groundHeightAt } from './city.js';
-import { parkedCars, trafficCars } from './traffic.js';
+import { collideBuildings, collideProps, groundHeightFor } from './city.js';
+import { parkedCars, trafficCars, ejectDriver } from './traffic.js';
 import { player, updateCamera } from './player.js';
 import { sfx } from './audio.js';
-import { commitCrime } from './police.js';
+import { commitCrime, jackableCop, onCopJacked, jackedCars } from './police.js';
 
 export function nearestStealable() {
   let best = null, bd = 4.6;
@@ -24,7 +24,58 @@ export function nearestStealable() {
     const d = c.pos.distanceTo(player.pos);
     if (d < bd) { bd = d; best = c; }
   }
+  for (const c of jackedCars) { // a cop car the player took earlier, now parked
+    if (c.taken || c.burnt) continue;
+    const d = c.pos.distanceTo(player.pos);
+    if (d < bd) { bd = d; best = c; }
+  }
   return best;
+}
+
+// The occupied vehicle the player can carjack right now: an active police
+// car (checked in police.js) or a traffic vehicle that is stopped or
+// crawling — red light, jam, nudged to a halt — with the player standing
+// at the driver's door. Moving traffic cannot be jacked.
+const JACK_NAMES = { car: 'car', moto: 'motorcycle', truck: 'truck' };
+export function nearestJackable() {
+  if (G.driving) return null;
+  const cop = jackableCop(player.pos);
+  if (cop) return { car: cop, cop: true, name: 'police car' };
+  let best = null, bd = 4.6;
+  for (const c of trafficCars) {
+    if (c.burnt || c.burning || (c.curSpeed || 0) > 2.5) continue;
+    const d = c.pos.distanceTo(player.pos);
+    if (d >= bd) continue;
+    const ry = c.mesh.rotation.y, fx = Math.sin(ry), fz = Math.cos(ry);
+    const side = (player.pos.x - c.pos.x) * fz - (player.pos.z - c.pos.z) * fx;
+    if (side <= 0) continue; // the driver's door only
+    bd = d; best = c;
+  }
+  return best ? { car: best, cop: false, name: JACK_NAMES[best.kind] || 'car' } : null;
+}
+
+// GTA-style jacking: the driver is pulled out onto the street (a police
+// driver becomes a foot chaser and the theft is a three-star crime the
+// moment it happens), then the player gets in and drives off through the
+// ordinary enterCar path. A jacked traffic vehicle joins the parked pool
+// once the player leaves it, exactly like a stolen parked car.
+export function carjack(j) {
+  const c = j.car;
+  if (j.cop) {
+    onCopJacked(c);
+    enterCar(c);
+    commitCrime(3, 'Police car jacked', { instant: true });
+    return c;
+  }
+  ejectDriver(c);
+  const i = trafficCars.indexOf(c);
+  if (i >= 0) trafficCars.splice(i, 1);
+  c.angle = c.mesh.rotation.y;
+  c.speed = 0;
+  parkedCars.push(c);
+  enterCar(c);
+  commitCrime(2, 'Carjacking', { victim: true });
+  return c;
 }
 
 export function enterCar(car) {
@@ -32,13 +83,19 @@ export function enterCar(car) {
   G.driving = car;
   G.onFoot = false;
   car.speed = 0;
+  // Clear the car's surface lock: the stateful ground sampler re-seeds
+  // it from the car's heading on its first frame inside a band.
+  car.surfMode = null;
   if (car.kind === 'moto') { // the lead stays visible, seated on the bike
     player.mesh.visible = true;
     if (car.mesh.userData.rider) car.mesh.userData.rider.visible = false;
   } else player.mesh.visible = false;
   G.stats.stolen++;
   G.stats.byClass[car.kind] = (G.stats.byClass[car.kind] || 0) + 1;
-  commitCrime(car.kind === 'police' || car.kind === 'firetruck' ? 2 : 1, 'Vehicle stolen');
+  // Stealing an emergency vehicle is reported by the station at once;
+  // an ordinary parked car only raises the stars if somebody sees it.
+  commitCrime(car.kind === 'police' || car.kind === 'firetruck' ? 2 : 1, 'Vehicle stolen',
+    car.kind === 'police' || car.kind === 'firetruck' ? { instant: true } : undefined);
   sfx.enter();
 }
 
@@ -49,6 +106,9 @@ export function exitCar() {
   car.speed = 0;
   if (car.mesh.userData.rider) car.mesh.userData.rider.visible = true;
   player.pos.set(car.pos.x + 2.6, 0.3, car.pos.z);
+  // The player steps out onto whatever surface the car is on (deck
+  // included) — hand the surface lock over with the position.
+  player.surfMode = car.surfMode; player.surfY = car.surfY;
   player.mesh.visible = true;
   G.driving = null;
   G.onFoot = true;
@@ -95,7 +155,11 @@ export function updateDriving(dt, camera, onCrash) {
     crashCooldown = 0.8;
     car.speed = 0; // a slow roll into a tree still stops the car
   }
-  car.pos.y = groundHeightAt(car.pos.x, car.pos.z, Math.abs(Math.cos(car.angle)) >= Math.abs(Math.sin(car.angle)) ? 'z' : 'x');
+  // Stateful surface (city.js groundHeightFor): the heading hint only
+  // seeds the first sample inside a band; after that the car keeps the
+  // surface it is on, so turning at the flyover crossing can no longer
+  // snap it between deck and street mid-turn.
+  car.pos.y = groundHeightFor(car, car.pos.x, car.pos.z, Math.abs(Math.cos(car.angle)) >= Math.abs(Math.sin(car.angle)) ? 'z' : 'x');
   car.mesh.position.copy(car.pos);
   car.mesh.rotation.y = car.angle;
   for (const w of car.mesh.userData.wheels) w.rotation.x += car.speed * dt * 2.2;

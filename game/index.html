@@ -6,7 +6,7 @@
 <title>Palm Cove — a low-poly open-world crime game</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌴</text></svg>">
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#191238; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:#fff; }
+  html, body { margin:0; height:100%; overflow:hidden; background:#191238; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:#fff; touch-action:none; }
   #app { position:fixed; inset:0; }
   canvas.webgl { display:block; }
   .panel { background:rgba(10,10,18,.66); border:2px solid rgba(255,255,255,.22); border-radius:10px; }
@@ -21,8 +21,8 @@
   #weapon { font-size:14px; font-weight:800; font-style:italic; text-transform:uppercase; opacity:.95; }
   #objectiveBox { position:absolute; top:12px; left:50%; transform:translateX(-50%); max-width:520px; padding:8px 16px; text-align:center; font-weight:700; font-size:15px; }
   #district { position:absolute; top:52px; right:14px; padding:4px 10px; font-size:24px; font-weight:900; font-style:italic; text-transform:uppercase; text-shadow:2px 2px 0 #000; color:#ffd9ec; }
-  #minimap { position:absolute; right:12px; bottom:12px; width:150px; height:190px; border:2px solid rgba(255,255,255,.55); border-radius:10px; }
-  #btnQuestHud { position:absolute; right:12px; bottom:212px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
+  #minimap { position:absolute; right:12px; top:92px; width:118px; height:150px; border:2px solid rgba(255,255,255,.55); border-radius:10px; }
+  #btnQuestHud { position:absolute; right:12px; top:252px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
   #hotbar { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; pointer-events:auto; }
   .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.35); border-radius:8px; background:rgba(10,10,18,.66); position:relative; text-align:center; cursor:pointer; }
   .slot.sel { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.55); }
@@ -52,7 +52,7 @@
   button:hover { background:#ffea70; }
   button.secondary { background:#dfe6e9; }
   #saveInfo { font-size:14px; opacity:.92; text-shadow:0 1px 4px #000; }
-  #pauseMenu, #statsMenu, #settingsMenu, #shopMenu, #endingMenu, #mapMenu, #questMenu, #controlsMenu { background:rgba(5,6,14,.78); display:none; }
+  #pauseMenu, #statsMenu, #settingsMenu, #shopMenu, #endingMenu, #mapMenu, #questMenu, #controlsMenu, #choiceMenu { background:rgba(5,6,14,.78); display:none; }
   #endingMenu { background:linear-gradient(180deg, rgba(201,79,124,.35), rgba(5,6,14,.88)); }
   #endingName { font-size:56px; font-style:italic; color:#ffd32a; text-shadow:0 4px 0 #e84393, 0 8px 20px #000; margin:0; }
   #endingText { font-size:18px; max-width:640px; line-height:1.55; }
@@ -105,7 +105,7 @@
 </div>
 <div id="tutBox" class="panel"><span id="tutText"></span><button id="btnTutSkip">Skip tutorial</button></div>
 <div id="joy"><div id="joyKnob"></div></div>
-<div id="joyBtns"><button id="joyRun">RUN</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button></div>
+<div id="joyBtns"><button id="joyRun">RUN</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
 <div id="menu" class="overlay">
   <h1>PALM COVE</h1>
   <p class="sub">Courier <b>Vera Solano</b> — or her partner <b>Dario “Dax” Vega</b> — owes fixer <b>Lucia Marrero</b>, and Palm Cove collects its debts in cash, cars and close calls. A low-poly open-world crime game on a long Florida peninsula at dusk. New Game wakes you up at home.</p>
@@ -131,6 +131,7 @@
   <h1 style="font-size:48px">PAUSED</h1>
   <div><button id="btnResume">Resume</button><button id="btnQuests" class="secondary">Quest Log</button><button id="btnMap" class="secondary">Map</button><button id="btnStats2" class="secondary">Stats</button></div>
   <div><button id="btnControls" class="secondary">Controls</button><button id="btnReplayFinale" class="secondary">Replay Finale</button><button id="btnSettings2" class="secondary">Settings</button><button id="btnRestart" class="secondary">Restart</button></div>
+  <div><button id="btnRadio" class="secondary">Radio: Neon FM</button></div>
 </div>
 <div id="questMenu" class="overlay">
   <h1 style="font-size:38px;margin:4px">QUEST LOG</h1>
@@ -158,7 +159,7 @@
       <tr><td>S (on title)</td><td>Stats screen</td></tr>
       <tr><td colspan="2" style="padding-top:10px"><b>TOUCH</b></td></tr>
       <tr><td>Joystick</td><td>Move / drive (enable it in Settings)</td></tr>
-      <tr><td>Drag screen</td><td>Orbit camera</td></tr>
+      <tr><td>Drag (right side)</td><td>Orbit camera — left side stays the joystick</td></tr>
       <tr><td>RUN (hold)</td><td>Sprint on foot</td></tr>
       <tr><td>E / F / X buttons</td><td>Interact · punch/use · use item</td></tr>
       <tr><td>QUESTS button</td><td>Open the quest log</td></tr>
@@ -181,6 +182,7 @@
     <div class="setrow"><span>Graphics</span><select id="setQuality"><option value="standard">Standard</option><option value="hd">HD</option></select></div>
     <div class="setrow"><span>Brightness</span><input type="range" id="setBright" min="50" max="150" value="100"></div>
     <div class="setrow"><span>On-screen joystick</span><input type="checkbox" id="setJoy"></div>
+    <div class="setrow"><span>Radio</span><select id="setRadio"><option value="off">Off</option><option value="0">Neon FM</option><option value="1">Cove Funk</option><option value="2">Sunset Chill</option></select></div>
   </div>
   <div><button id="btnControls2" class="secondary">Controls</button><button id="btnSettingsBack">Back</button></div>
 </div>

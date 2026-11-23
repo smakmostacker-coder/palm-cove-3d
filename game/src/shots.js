@@ -1,14 +1,16 @@
 // Deterministic screenshot staging: ?shot=title|drive|chase|map&seed=1
 // Positions the player, cars, police and mission state so each capture is
-// repeatable. The title shot is the character-choice screen itself — both
-// leads on the beach in front of the deco strip, lighthouse behind them.
+// repeatable. The title shot is the REAL title menu — the PALM COVE menu
+// over the default title-orbit view of the city, exactly what a player
+// sees at first load (both leads still stand on the beach in the world
+// behind it). Staging never pokes overlay displays directly: it sets
+// window.__shotOverlay and main.js applies it through showOverlay().
 import { G } from './state.js';
 import { player } from './player.js';
 import { parkedCars } from './traffic.js';
 import { cops, setHeliAngle, heliCfg } from './police.js';
 import { enterCar } from './driving.js';
 import { addItem, selectSlot } from './inventory.js';
-import { drawFullMap } from './hud.js';
 import { cancelWake } from './facilities.js';
 
 export function parseShot() {
@@ -20,9 +22,7 @@ export function stageShot(name, startPlaying) {
   if (!name) return;
   if (name === 'title') {
     G.mode = 'title';
-    window.__titleCam = { pos: [246, 10, 168], look: [168, 9, 108] };
-    document.getElementById('menu').style.display = 'none';
-    document.getElementById('choiceMenu').style.display = 'flex';
+    window.__shotOverlay = 'menu';
     return;
   }
   if (name === 'drive') G.character = 'dax'; // male-lead gameplay shot
@@ -55,7 +55,7 @@ export function stageShot(name, startPlaying) {
     player.pos.set(4, 0.3, 120);
     G.camYaw = 0.4;
     G.objective = 'Free roam — checking the map of the peninsula.';
-    const mm = document.getElementById('mapMenu');
-    if (mm) { mm.style.display = 'flex'; G.mode = 'paused'; setTimeout(drawFullMap, 350); }
+    G.mode = 'paused';
+    window.__shotOverlay = 'map'; // main.js shows it and draws the map
   }
 }

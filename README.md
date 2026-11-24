@@ -2,7 +2,11 @@
 
 A low-poly 3D open-world crime game on a sunlit Florida peninsula — steal cars, run jobs, outrun the law.
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Engine: Three.js](https://img.shields.io/badge/Engine-Three.js-black.svg) ![Play: Offline](https://img.shields.io/badge/Play-Offline-green.svg)
+[![gta6-01 bounty](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/smakmostacker-coder/palm-cove-3d/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/smakmostacker-coder/palm-cove-3d/reward.svg)](https://make.fun/bounty/gta6-01)
+
+Bounty page: https://make.fun/bounty/gta6-01
 
 ## What is this
 

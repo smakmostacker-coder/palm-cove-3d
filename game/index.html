@@ -22,7 +22,8 @@
   #objectiveBox { position:absolute; top:12px; left:50%; transform:translateX(-50%); max-width:520px; padding:8px 16px; text-align:center; font-weight:700; font-size:15px; }
   #district { position:absolute; top:52px; right:14px; padding:4px 10px; font-size:24px; font-weight:900; font-style:italic; text-transform:uppercase; text-shadow:2px 2px 0 #000; color:#ffd9ec; }
   #minimap { position:absolute; right:12px; top:92px; width:118px; height:150px; border:2px solid rgba(255,255,255,.55); border-radius:10px; cursor:pointer; pointer-events:auto; }
-  #btnQuestHud { position:absolute; right:12px; top:252px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
+  #zoomBtn { position:absolute; right:12px; top:252px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
+  #btnQuestHud { position:absolute; right:12px; top:296px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
   #hotbar { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; pointer-events:auto; }
   .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.35); border-radius:8px; background:rgba(10,10,18,.66); position:relative; text-align:center; cursor:pointer; }
   .slot.sel { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.55); }
@@ -95,6 +96,7 @@
   <div id="objectiveBox" class="panel"><span id="objective"></span></div>
   <div id="district">Palm District</div>
   <canvas id="minimap" width="150" height="190"></canvas>
+  <button id="zoomBtn">ZOOM · MID</button>
   <button id="btnQuestHud">QUESTS</button>
   <div id="hotbar"></div>
   <div id="prompt" class="panel"></div>
@@ -105,7 +107,7 @@
 </div>
 <div id="tutBox" class="panel"><span id="tutText"></span><button id="btnTutSkip">Skip tutorial</button></div>
 <div id="joy"><div id="joyKnob"></div></div>
-<div id="joyBtns"><button id="joyRun">RUN</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
+<div id="joyBtns"><button id="joyRun">RUN</button><button id="joyGas" style="display:none">GAS</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
 <div id="menu" class="overlay">
   <h1>PALM COVE</h1>
   <p class="sub">Courier <b>Vera Solano</b> — or her partner <b>Dario “Dax” Vega</b> — owes fixer <b>Lucia Marrero</b>, and Palm Cove collects its debts in cash, cars and close calls. A low-poly open-world crime game on a long Florida peninsula at dusk. New Game wakes you up at home.</p>
@@ -146,6 +148,7 @@
       <tr><td>W A S D / Arrows</td><td>Move / drive</td></tr>
       <tr><td>Mouse drag</td><td>Orbit camera — it also eases behind you as you turn</td></tr>
       <tr><td>Shift (hold)</td><td>Sprint on foot</td></tr>
+      <tr><td>Space (hold, while driving)</td><td>GAS boost</td></tr>
       <tr><td>E</td><td>Enter / exit a vehicle · enter a building · shop</td></tr>
       <tr><td>F</td><td>Punch · talk to a debtor · use (bed, counter, ATM, jewel case…)</td></tr>
       <tr><td>Mouse click</td><td>Fire the equipped weapon</td></tr>
@@ -161,6 +164,7 @@
       <tr><td>Joystick</td><td>Move / drive (enable it in Settings)</td></tr>
       <tr><td>Drag (right side)</td><td>Orbit camera — left side stays the joystick</td></tr>
       <tr><td>RUN (hold)</td><td>Sprint on foot</td></tr>
+      <tr><td>GAS (hold, while driving)</td><td>Boost</td></tr>
       <tr><td>E / F / X buttons</td><td>Interact · punch/use · use item</td></tr>
       <tr><td>QUESTS button</td><td>Open the quest log</td></tr>
       <tr><td>Hotbar slots</td><td>Tap to select</td></tr>

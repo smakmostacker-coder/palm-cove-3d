@@ -72,17 +72,20 @@ export const MARINA = { x: 170, z: 170 };
 export const KEY_TOWN = { x: 6, z: 402 }; // Key Solano settlement, end of the causeway
 
 export const TUNING = {
-  walkSpeed: 7, sprintSpeed: 12, carAccel: 26, carMax: 34, carReverse: 10,
+  walkSpeed: 7, sprintSpeed: 12, carAccel: 17, carMax: 22, carReverse: 6,
   wantedDecaySeconds: 14, bustFillRate: 0.45, bustDrainRate: 0.3,
 };
 
-// Per-class handling for the five stealable vehicle classes.
+// Per-class handling for the five stealable vehicle classes. Round 5
+// retune: base speeds/accels scaled down ~35% across the board so a car
+// is controllable at full throttle; the old pace is still reachable by
+// holding GAS (BOOST_MULT in driving.js scales accel + top speed).
 export const HANDLING = {
-  car:       { accel: 26, max: 34, reverse: 10, turn: 1.7,  dmg: 1.0 },
-  moto:      { accel: 36, max: 44, reverse: 6,  turn: 2.7,  dmg: 0.6 },
-  truck:     { accel: 14, max: 24, reverse: 7,  turn: 1.05, dmg: 2.2 },
-  police:    { accel: 31, max: 39, reverse: 10, turn: 1.9,  dmg: 1.1 },
-  firetruck: { accel: 15, max: 26, reverse: 7,  turn: 1.1,  dmg: 2.0 },
+  car:       { accel: 17, max: 22, reverse: 6, turn: 1.7,  dmg: 1.0 },
+  moto:      { accel: 23, max: 28, reverse: 4, turn: 2.7,  dmg: 0.6 },
+  truck:     { accel: 9,  max: 16, reverse: 5, turn: 1.05, dmg: 2.2 },
+  police:    { accel: 21, max: 26, reverse: 7, turn: 1.9,  dmg: 1.1 },
+  firetruck: { accel: 10, max: 17, reverse: 5, turn: 1.1,  dmg: 2.0 },
 };
 
 export const SAVE_KEY = 'palm-cove-save-v2';

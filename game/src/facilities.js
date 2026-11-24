@@ -19,7 +19,7 @@
 // both. From the gameplay camera the room reads as a furnished interior.
 import { G } from './state.js';
 import { SITES, HOSPITAL, ROADS, ROAD_W } from './config.js';
-import { colliders, setRoomColliders } from './city.js';
+import { colliders, setRoomColliders, TOWN_STREETS } from './city.js';
 import { addItem, ITEM_DEFS } from './inventory.js';
 import { commitCrime } from './police.js';
 import { sfx } from './audio.js';
@@ -86,6 +86,9 @@ const HINTS = {
   surf: 'Palm Boulevard · south side, west end', books: 'Palm Boulevard · south side', decoFlats: 'Palm Boulevard · north side',
   blvdFlats: 'Palm Boulevard · north side', hospital: 'Coral Heights · fronting the z=-75 road',
   home: 'Coral Heights · on the mid street', house1: 'Coral Heights', house2: 'Old Town', food: 'Palm Boulevard · south side',
+  mart2: 'Palmetto Flats · main street', motel1: 'Palmetto Flats · main street',
+  gas2: 'Cypress Junction · main street', diner1: 'Cypress Junction · main street',
+  apotik2: 'Tallahassee Palms · main street', motel2: 'Tallahassee Palms · main street',
 };
 // The lead's home: a Coral Heights house, a short walk from spawn.
 export const HOME = { x: 118, z: -48 };
@@ -117,6 +120,25 @@ function exterior(scene, x, z, w, h, d, color, label, fg, face = 's') {
   const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.4, d + 0.6), mat(0x3d4454));
   cap.position.set(x, h + 0.2, z); scene.add(cap);
   colliders.push({ x, z, hw: w / 2, hd: d / 2 });
+  if (face === 'e' || face === 'w') {
+    // Side face for lots fronting a north–south street (peninsula town
+    // fallback lots): the same modelled door, sign and canopy, turned 90°.
+    const dirX = face === 'e' ? 1 : -1;
+    const faceX = x + dirX * (w / 2);
+    const s2 = new THREE.Mesh(new THREE.PlaneGeometry(d * 0.85, 3.2), new THREE.MeshBasicMaterial({ map: signTex(label, fg, '#14101f'), side: THREE.DoubleSide }));
+    s2.position.set(faceX + dirX * 0.2, h - 1.2, z);
+    s2.rotation.y = dirX * Math.PI / 2;
+    scene.add(s2);
+    const frame2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4.8, 3.6), mat(0x14161c));
+    frame2.position.set(faceX + dirX * 0.18, 2.4, z); scene.add(frame2);
+    const panel2 = new THREE.Mesh(new THREE.BoxGeometry(0.26, 4.1, 2.5), mat(0x1f6f8b));
+    panel2.position.set(faceX + dirX * 0.38, 2.05, z); scene.add(panel2);
+    const step2 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.25, 4.4), mat(0x8e9aaf));
+    step2.position.set(faceX + dirX * 1.15, 0.12, z); scene.add(step2);
+    const canopy2 = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.18, d * 0.55), mat(0xd64570));
+    canopy2.position.set(faceX + dirX * 1.25, h * 0.55, z); canopy2.rotation.z = -dirX * 0.16; scene.add(canopy2);
+    return { x: faceX + dirX * 2.2, z };
+  }
   const faceZ = z + dir * (d / 2);
   const s = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.85, 3.2), new THREE.MeshBasicMaterial({ map: signTex(label, fg, '#14101f'), side: THREE.DoubleSide }));
   s.position.set(x, h - 1.2, faceZ + dir * 0.2);
@@ -192,10 +214,132 @@ function enterable(scene, def, ext, room) {
 
 let homeEnt = null, homeBed = null, homeStand = null;
 
+// ---- Peninsula town facilities ---------------------------------------------
+// The three grid towns on the spine (PALMETTO FLATS, CYPRESS JUNCTION,
+// TALLAHASSEE PALMS) ship with streets and frontage buildings but no working
+// facilities. Each town gets one menu shop and one walk-in here. Town lots
+// are already filled with grid buildings, so placement is searched, never
+// assumed: findLot scans the town's streets for the first footprint that is
+// clear of every existing collider, every street band and the highway, with
+// the door side fronting its street at the standard 2–4 unit face gap.
+// Because a lot is proven clear BEFORE exterior() runs, exterior()'s
+// clearPlot backstop finds nothing of the towns' own to delete — no rendered
+// building is ever left as a pass-through ghost.
+const TOWN_RANGES = [
+  { z0: -1510, z1: -1330, cz: -1420 },  // PALMETTO FLATS
+  { z0: -2170, z1: -1990, cz: -2080 },  // CYPRESS JUNCTION
+  { z0: -4265, z1: -4095, cz: -4180 },  // TALLAHASSEE PALMS
+];
+function lotFree(x, z, hw, hd, streets, reserved) {
+  const bx0 = x - hw, bx1 = x + hw, bz0 = z - hd, bz1 = z + hd;
+  // (b) street bands + a 1-unit margin: the peninsula highway, plus every
+  // street of the town (EW and NS).
+  if (bx0 < 8.5 && bx1 > -8.5) return false; // highway |x| <= 7.5 + margin
+  if (bz0 < -4269) return false; // far-shore world edge (Tallahassee Palms)
+  for (const s of streets) {
+    if (s.axis === 'ew') { if (bx0 < s.to + 1 && bx1 > s.from - 1 && bz0 < s.at + s.halfW + 1 && bz1 > s.at - s.halfW - 1) return false; }
+    else if (bx0 < s.at + s.halfW + 1 && bx1 > s.at - s.halfW - 1 && bz0 < s.to + 1 && bz1 > s.from - 1) return false;
+  }
+  // The roadside pickup layby each town reserves on its main street.
+  for (const r of TOWN_RANGES) {
+    const px = 14, pz = r.cz + 12;
+    const nx = Math.max(bx0, Math.min(px, bx1)), nz = Math.max(bz0, Math.min(pz, bz1));
+    if (Math.hypot(px - nx, pz - nz) < 8) return false;
+  }
+  // (a) no existing collider — tested with clearPlot's own 0.6 margin plus a
+  // hair, so a lot accepted here can never make clearPlot delete anything.
+  for (const c of colliders) if (Math.abs(c.x - x) < c.hw + hw + 0.7 && Math.abs(c.z - z) < c.hd + hd + 0.7) return false;
+  for (const c of reserved) if (Math.abs(c.x - x) < c.hw + hw + 0.7 && Math.abs(c.z - z) < c.hd + hd + 0.7) return false;
+  return true;
+}
+// Scan both sides of the town's EW streets (main street first), then its NS
+// streets, then smaller footprints, for the first lot that fits. Returns
+// {x, z, face, w, d} — w/d are swapped on NS lots, where the building turns
+// 90° and its door faces the NS street ('e'/'w') — or null when nothing fits.
+function findLot(range, sizes, reserved) {
+  const ew = TOWN_STREETS.filter((s) => s.axis === 'ew' && s.at >= range.z0 && s.at <= range.z1);
+  ew.sort((a, b) => Math.abs(a.at - range.cz) - Math.abs(b.at - range.cz));
+  const ns = TOWN_STREETS.filter((s) => s.axis === 'ns' && s.from >= range.z0 - 1 && s.to <= range.z1 + 1);
+  const streets = ew.concat(ns);
+  for (const [w, d] of sizes) {
+    const hw = w / 2, hd = d / 2;
+    for (const s of ew) for (const side of [-1, 1]) for (const gap of [3, 2, 4]) {
+      const z = s.at + side * (s.halfW + gap + hd);
+      for (let x = s.from + hw + 1; x <= s.to - hw - 1; x += 1) {
+        if (lotFree(x, z, hw, hd, streets, reserved)) return { x, z, face: side < 0 ? 's' : 'n', w, d };
+      }
+    }
+    for (const s of ns) for (const side of [-1, 1]) for (const gap of [3, 2, 4]) {
+      const x = s.at + side * (s.halfW + gap + hd); // turned: depth (hd) fronts the street
+      for (let z = s.from + hw + 1; z <= s.to - hw - 1; z += 1) {
+        if (lotFree(x, z, hd, hw, streets, reserved)) return { x, z, face: side < 0 ? 'e' : 'w', w: d, d: w };
+      }
+    }
+  }
+  return null;
+}
+function buildTownEnterable(scene, def, lot) {
+  const door = exterior(scene, lot.x, lot.z, lot.w, def.kind === 'food' ? 7 : 6, lot.d, def.color, def.name, def.sign, lot.face);
+  if (def.kind === 'food') { // CYPRESS DINER: PALM KITCHEN's room plan and counter contract
+    const room = makeRoom(scene, 22, 16, 0x9c6644, 0xf5e6d3);
+    for (const [tx, tz] of [[-6, -3], [0, -3.5], [6, -3], [-3, 2.5], [3.5, 2.5]]) {
+      room.furn(tx, tz, 2.2, 0.85, 2.2, 0xf5f6fa);      // table
+      room.furn(tx - 1.7, tz, 0.6, 1, 0.6, 0xd63031);   // chair
+      room.furn(tx + 1.7, tz, 0.6, 1, 0.6, 0xd63031);   // chair
+    }
+    const counter = room.furn(0, -6.8, 12, 1.15, 1.2, 0x7f5539);
+    room.sign(0, -7.6, 'CYPRESS DINER · MEALS $18', '#ffd32a', 12);
+    const e = enterable(scene, { id: def.id, name: def.name, kind: 'food' }, door, room);
+    e.counter = { x: counter.position.x, z: counter.position.z };
+    return e;
+  }
+  // Motel room, kind 'house' (inert like the rentable houses): two beds, a
+  // desk, a TV, a wardrobe.
+  const room = makeRoom(scene, 20, 15, 0xb08968, 0xe6ddcb);
+  room.furn(-6, -4.5, 3, 0.8, 4.6, 0xf5f6fa);           // bed 1
+  room.furn(-6, -4.5, 3.2, 0.25, 4.8, 0xff5da2, false, 0.8); // blanket
+  room.furn(6, -4.5, 3, 0.8, 4.6, 0xf5f6fa);            // bed 2
+  room.furn(6, -4.5, 3.2, 0.25, 4.8, 0x2ec4b6, false, 0.8);  // blanket
+  room.furn(-6, 0.5, 3.4, 0.9, 2, 0x8d6e63);            // desk / table (kept clear of the (0, 3.5) spawn point)
+  room.furn(6, -0.5, 3.4, 1.6, 0.4, 0x14161c);          // TV
+  room.furn(-5, 4.5, 2.6, 2, 0.8, 0x57606f);            // wardrobe
+  room.sign(0, -7.2, def.name, '#ffd32a');
+  return enterable(scene, { id: def.id, name: def.name, kind: 'house' }, door, room);
+}
+function buildTownFacilities(scene) {
+  const reserved = [];
+  const towns = [
+    { range: TOWN_RANGES[0],
+      shop: { id: 'mart2', name: 'PALMETTO MART', color: 0x27ae60, sign: '#7ef0d4', shop: [{ item: 'snack', price: 15 }, { item: 'cola', price: 8 }] },
+      ent: { id: 'motel1', name: 'PALMETTO MOTEL', kind: 'house', color: 0xffc8a0, sign: '#ffd32a' } },
+    { range: TOWN_RANGES[1],
+      shop: { id: 'gas2', name: 'CYPRESS GAS', color: 0xe67e22, sign: '#ffe9a8', shop: [{ item: 'cola', price: 8 }] },
+      ent: { id: 'diner1', name: 'CYPRESS DINER', kind: 'food', color: 0xe67e22, sign: '#ffe9a8' } },
+    { range: TOWN_RANGES[2],
+      shop: { id: 'apotik2', name: 'FAR SHORE APOTIK', color: 0xf5f6fa, sign: '#2ed573', shop: [{ item: 'medkit', price: 60 }, { item: 'snack', price: 20 }] },
+      ent: { id: 'motel2', name: 'FAR SHORE MOTEL', kind: 'house', color: 0xa0e8dd, sign: '#ffd32a' } },
+  ];
+  for (const t of towns) {
+    // Menu shop: appended to FACILITIES now so the exterior pass below (and
+    // with it PLACES and the map door markers) picks it up automatically.
+    const shopLot = findLot(t.range, [[16, 12], [14, 11], [12, 10]], reserved);
+    if (shopLot) {
+      reserved.push({ x: shopLot.x, z: shopLot.z, hw: shopLot.w / 2, hd: shopLot.d / 2 });
+      FACILITIES.push({ ...t.shop, x: shopLot.x, z: shopLot.z, face: shopLot.face, w: shopLot.w, d: shopLot.d });
+    } else console.warn('findLot: no lot for', t.shop.id);
+    const entLot = findLot(t.range, t.ent.kind === 'food' ? [[16, 12], [14, 11]] : [[14, 11], [12, 10]], reserved);
+    if (entLot) {
+      reserved.push({ x: entLot.x, z: entLot.z, hw: entLot.w / 2, hd: entLot.d / 2 });
+      buildTownEnterable(scene, t.ent, entLot);
+    } else console.warn('findLot: no lot for', t.ent.id);
+  }
+}
+
 export function buildFacilities(scene) {
+  buildTownFacilities(scene);
   for (const f of FACILITIES) {
     if (f.id === 'apotik') continue; // APOTIK is a walk-in enterable — buildInteriors builds its exterior and shares the door
-    f.door = exterior(scene, f.x, f.z, 16, 8, 12, f.color, f.name, f.sign, f.face);
+    f.door = exterior(scene, f.x, f.z, f.w || 16, 8, f.d || 12, f.color, f.name, f.sign, f.face);
   }
   buildInteriors(scene);
   buildPrison(scene);

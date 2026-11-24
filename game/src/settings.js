@@ -1,8 +1,8 @@
 // Player settings, persisted in localStorage and applied immediately.
 //
 // Covered here: sound volume and mute, the FPS cap (30 or 60), the graphics
-// tier ('standard' or 'hd'), screen brightness, and the on-screen joystick
-// toggle. Touch devices additionally auto-enable the touch UI in touch.js;
+// tier ('standard' or 'hd'), screen brightness, the minimap zoom level, and
+// the on-screen joystick toggle. Touch devices additionally auto-enable the touch UI in touch.js;
 // this stored flag remains the manual override the Settings screen exposes.
 export const SETTINGS_KEY = 'palm-cove-settings-v1';
 
@@ -15,6 +15,7 @@ export const settings = {
   joystick: false,
   radioStation: 0, // index into the radio stations in audio.js (0 = Neon FM)
   radioOn: true,
+  mapZoom: 1, // minimap zoom level index into hud.js MAP_ZOOM_LEVELS (0 near, 1 mid, 2 far)
 };
 
 export function loadSettings() {

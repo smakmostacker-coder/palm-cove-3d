@@ -155,6 +155,21 @@ for (let i = 0; i < ROADS.length - 1; i++) for (let j = 0; j < ROADS.length - 1;
   if ((i + j) % 2 === 0) SOUTH_STREETS.push({ axis: 'ew', at: cz, from: ROADS[i] + ROAD_W / 2, to: ROADS[i + 1] - ROAD_W / 2, halfW: 4 });
   else SOUTH_STREETS.push({ axis: 'ns', at: cx, from: ROADS[j] + ROAD_W / 2, to: ROADS[j + 1] - ROAD_W / 2, halfW: 4 });
 }
+// ---- Peninsula grid towns (round 5) --------------------------------------
+// Real towns on the spine are DATA, not clusters: each entry in TOWN_GRIDS
+// is built by one generic grid builder in buildPeninsula — EW streets at
+// ewZ spanning x0..x1, NS streets at nsX spanning z0..z1, buildings fronting
+// those streets, lamps/trees/signs as props. To add a town, add one entry
+// here (name, centre z, street centrelines, extents, seed, target building
+// count) — no new builder code. Every street a grid town lays is registered
+// in TOWN_STREETS in the SOUTH_STREETS shape ({axis, at, from, to, halfW})
+// so the HUD map and checkers see the same streets the world built.
+export const TOWN_STREETS = [];
+export const TOWN_GRIDS = [
+  { name: 'PALMETTO FLATS', cz: -1420, ewZ: [-1480, -1420, -1360], nsX: [-38, 38], x0: -100, x1: 100, z0: -1510, z1: -1330, seed: 142001, target: 28 },
+  { name: 'CYPRESS JUNCTION', cz: -2080, ewZ: [-2140, -2080, -2020], nsX: [-38, 38], x0: -100, x1: 100, z0: -2170, z1: -1990, seed: 208002, target: 26 },
+  { name: 'TALLAHASSEE PALMS', cz: -4180, ewZ: [-4245, -4180, -4115], nsX: [-45, 45], x0: -150, x1: 150, z0: -4265, z1: -4095, seed: 418003, target: 34 },
+];
 export const DIAG_SEG = { x1: -64, z1: 11, x2: -11, z2: 64, halfW: 3.5 };
 export const PLAZA_RECT = { x0: 17, x1: 49, z0: 35, z1: 63 };
 export const PROM_HALF_W = 3;
@@ -1233,14 +1248,24 @@ function buildPeninsula(scene, rng) {
   scene.add(hwPoles); scene.add(hwHeads);
   // Roadside towns: clusters of low blocks either side of the highway, each
   // with a name sign on a solid post at its entrance.
+  // PALMETTO FLATS, CYPRESS JUNCTION and TALLAHASSEE PALMS are no longer
+  // token clusters — they are grid towns (TOWN_GRIDS, built below; their
+  // entrance signs come from the grid builder too).
   const TOWNS = [
-    { z: -760, name: 'LAKEPORT · OKEECHOBEE' }, { z: -1420, name: 'PALMETTO FLATS' },
-    { z: -2080, name: 'CYPRESS JUNCTION' }, { z: -2740, name: 'KISSIMMEE PRAIRIE' },
+    { z: -760, name: 'LAKEPORT · OKEECHOBEE' },
+    { z: -2740, name: 'KISSIMMEE PRAIRIE' },
     { z: -3380, name: 'SUWANNEE CROSSING' }, { z: -3980, name: 'PANHANDLE GATE' },
-    { z: -4200, name: 'TALLAHASSEE PALMS' },
   ];
   const townTex = facadeTex(rng, '#e6ddcb', 0.5, 4, 3, true);
   const blocks = [];
+  // The removed clusters' rng draws are burned in their original positions
+  // in the sequence (two after LAKEPORT, one after PANHANDLE GATE), so the
+  // four remaining clusters — and every placement downstream of this
+  // function — keep the exact stream they had before the grid towns landed.
+  const burnClusterDraws = () => {
+    const n = 7 + Math.floor(rng() * 5);
+    for (let i = 0; i < n * 5; i++) rng();
+  };
   for (const t of TOWNS) {
     const n = 7 + Math.floor(rng() * 5);
     for (let i = 0; i < n; i++) {
@@ -1256,6 +1281,150 @@ function buildPeninsula(scene, rng) {
     const sign = signMesh(t.name, '#ffe9a8', '#243014', 15, 3);
     sign.position.set(11, 5.6, t.z + 60); scene.add(sign);
     buildingCounts['Peninsula towns'] = (buildingCounts['Peninsula towns'] || 0) + n;
+    if (t.name === 'LAKEPORT · OKEECHOBEE') { burnClusterDraws(); burnClusterDraws(); } // PALMETTO + CYPRESS slots
+    if (t.name === 'PANHANDLE GATE') burnClusterDraws(); // TALLAHASSEE slot
+  }
+  // ---- Grid towns ---------------------------------------------------------
+  // One generic builder for every TOWN_GRIDS entry. Streets are asphalt
+  // planes registered in TOWN_STREETS; buildings are generated as frontage
+  // rows on every street (face 2–4 units off the band edge), tested against
+  // the highway band, every street band of the town, a roadside pickup
+  // reserve, and each other — a candidate that does not fit is skipped,
+  // never nudged. All sizes come from a SEPARATE rng seeded per town, so
+  // the shared stream (and every placement downstream) never shifts.
+  // Buildings join the same blocks[] list as the clusters, so they render
+  // through townInst + parapet caps with per-instance tints.
+  TOWN_STREETS.length = 0;
+  const townLampSpots = [], townTreeSpots = [];
+  const townPaveMat = mat(0x39404d);
+  function buildGridTown(def) {
+    const trng = makeRng(def.seed);
+    const streets = [];
+    for (const z of def.ewZ) {
+      const s = { axis: 'ew', at: z, from: def.x0, to: def.x1, halfW: 5 };
+      streets.push(s); TOWN_STREETS.push(s);
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(def.x1 - def.x0, s.halfW * 2), townPaveMat);
+      p.rotation.x = -Math.PI / 2; p.position.set((def.x0 + def.x1) / 2, 0.02, z); scene.add(p);
+    }
+    for (const x of def.nsX) {
+      const s = { axis: 'ns', at: x, from: def.z0, to: def.z1, halfW: 5 };
+      streets.push(s); TOWN_STREETS.push(s);
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(s.halfW * 2, def.z1 - def.z0), townPaveMat);
+      p.rotation.x = -Math.PI / 2; p.position.set(x, 0.02, (def.z0 + def.z1) / 2); scene.add(p);
+    }
+    const bandOf = (s) => s.axis === 'ew'
+      ? { x0: s.from, x1: s.to, z0: s.at - s.halfW, z1: s.at + s.halfW }
+      : { x0: s.at - s.halfW, x1: s.at + s.halfW, z0: s.from, z1: s.to };
+    const bands = streets.map(bandOf);
+    const placed = []; // candidate AABBs, incl. ones later cut by the target cap
+    function tBlocked(x, z, hw, hd) {
+      const x0 = x - hw, x1 = x + hw, z0 = z - hd, z1 = z + hd;
+      if (x0 < 10.5 && x1 > -10.5) return true; // highway band 7.5 + margin
+      if (z0 < -4270) return true; // world edge: nothing south of the far shore line (only Tallahassee Palms ever reaches it)
+      for (const b of bands) if (x0 < b.x1 && x1 > b.x0 && z0 < b.z1 && z1 > b.z0) return true;
+      // Roadside pickup layby on the main street's south side, east of the
+      // highway (the snack spot at (14, -1408) for Palmetto Flats).
+      const px = 14, pz = def.cz + 12;
+      const nx = Math.max(x0, Math.min(px, x1)), nz = Math.max(z0, Math.min(pz, z1));
+      if (Math.hypot(px - nx, pz - nz) < 8) return true;
+      for (const b of placed) if (x0 < b.x1 + 0.7 && x1 > b.x0 - 0.7 && z0 < b.z1 + 0.7 && z1 > b.z0 - 0.7) return true;
+      return false;
+    }
+    const candidates = [];
+    function rowEW(at, side) {
+      let cur = def.x0;
+      while (cur < def.x1 - 7) {
+        const w = 10 + trng() * 9, d = 10 + trng() * 9, h = 5 + trng() * 9, gap = 2 + trng() * 2;
+        const cx = cur + w / 2, cz = at + side * (5 + gap + d / 2);
+        if (!tBlocked(cx, cz, w / 2, d / 2)) {
+          candidates.push({ x: cx, z: cz, w, d, h });
+          placed.push({ x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2 });
+          cur += w + 1.2 + trng() * 1.8;
+        } else cur += 3;
+      }
+    }
+    function rowNS(at, side) {
+      let cur = def.z0;
+      while (cur < def.z1 - 7) {
+        const len = 10 + trng() * 9, dep = 10 + trng() * 9, h = 5 + trng() * 9, gap = 2 + trng() * 2;
+        const cz = cur + len / 2, cx = at + side * (5 + gap + dep / 2);
+        if (!tBlocked(cx, cz, dep / 2, len / 2)) {
+          candidates.push({ x: cx, z: cz, w: dep, d: len, h });
+          placed.push({ x0: cx - dep / 2, x1: cx + dep / 2, z0: cz - len / 2, z1: cz + len / 2 });
+          cur += len + 1.2 + trng() * 1.8;
+        } else cur += 3;
+      }
+    }
+    for (const z of def.ewZ) { rowEW(z, -1); rowEW(z, 1); }
+    for (const x of def.nsX) { rowNS(x, -1); rowNS(x, 1); }
+    // Cap at the town's target: shuffle the candidate order with the town
+    // rng, keep the target count, then restore street order for placement —
+    // the kept set stays spread across every street and side.
+    let kept = candidates;
+    if (def.target && candidates.length > def.target) {
+      const order = candidates.map((_, i) => i);
+      for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(trng() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+      const chosen = new Set(order.slice(0, def.target));
+      kept = candidates.filter((_, i) => chosen.has(i));
+    }
+    for (const b of kept) {
+      blocks.push(b);
+      colliders.push({ x: b.x, z: b.z, hw: b.w / 2, hd: b.d / 2 });
+      buildingRecords.push({ x: b.x, z: b.z, hw: b.w / 2, hd: b.d / 2 });
+    }
+    buildingCounts[def.name] = (buildingCounts[def.name] || 0) + kept.length;
+    // Lamps along the main street (the cz EW street): pole + glowing head,
+    // on the street edge, clear of the highway crossing and NS junctions.
+    for (let x = def.x0 + 5; x <= def.x1 - 5; x += 20) {
+      if (Math.abs(x) < 12) continue;
+      if (def.nsX.some((nx) => Math.abs(x - nx) < 9)) continue;
+      townLampSpots.push({ x, z: def.cz + (x < 0 ? -6 : 6), town: def.name });
+    }
+    // Trees on block corners: the four corners of every street crossing,
+    // plus the town's outer corners — skipped when a kept building stands
+    // there, so a trunk never grows through a facade.
+    const treeAt = (tx, tz) => {
+      if (Math.abs(tx) < 10.5) return;
+      for (const b of kept) if (tx > b.x - b.w / 2 - 1.5 && tx < b.x + b.w / 2 + 1.5 && tz > b.z - b.d / 2 - 1.5 && tz < b.z + b.d / 2 + 1.5) return;
+      for (const bd of bands) if (tx > bd.x0 - 1 && tx < bd.x1 + 1 && tz > bd.z0 - 1 && tz < bd.z1 + 1) return;
+      townTreeSpots.push({ x: tx, z: tz, town: def.name });
+    };
+    for (const ez of def.ewZ) for (const nx of def.nsX) for (const sx of [-1, 1]) for (const sz of [-1, 1]) treeAt(nx + sx * 9, ez + sz * 9);
+    treeAt(def.x0 + 6, def.z0 + 6); treeAt(def.x1 - 6, def.z0 + 6);
+    treeAt(def.x0 + 6, def.z1 - 6); treeAt(def.x1 - 6, def.z1 - 6);
+    // Entrance name signs on the highway at the town's north and south
+    // edges — same signMesh + post + addProp pattern as the cluster towns.
+    for (const ez of [def.z0, def.z1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 5.4, 5), mat(0x2f3542));
+      post.position.set(11, 2.7, ez); scene.add(post); addProp(11, ez, 0.35);
+      const sign = signMesh(def.name, '#ffe9a8', '#243014', 15, 3);
+      sign.position.set(11, 5.6, ez); scene.add(sign);
+    }
+    return kept.length;
+  }
+  for (const def of TOWN_GRIDS) buildGridTown(def);
+  // Town lamps and trees, instanced like their highway / southern kin.
+  if (townLampSpots.length) {
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.1, 0.1, 5.6, 5), mat(0x2f3542), townLampSpots.length);
+    const heads = new THREE.InstancedMesh(new THREE.SphereGeometry(0.42, 6, 5), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }), townLampSpots.length);
+    townLampSpots.forEach((s, k) => {
+      _p.set(s.x, 2.8, s.z); _s.set(1, 1, 1); poles.setMatrixAt(k, _m().compose(_p, _q, _s));
+      _p.y = 5.8; heads.setMatrixAt(k, _m().compose(_p, _q, _s));
+      addProp(s.x, s.z, 0.3);
+    });
+    poles.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
+    scene.add(poles); scene.add(heads);
+  }
+  if (townTreeSpots.length) {
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.3, 3.2, 5), mat(0x6d4c41), townTreeSpots.length);
+    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(2.3, 7, 6), mat(0x2f9e44), townTreeSpots.length);
+    townTreeSpots.forEach((s, k) => {
+      _p.set(s.x, 1.6, s.z); _s.set(1, 1, 1); trunks.setMatrixAt(k, _m().compose(_p, _q, _s));
+      _p.set(s.x, 4.6, s.z); _s.set(1, 0.85, 1); canopies.setMatrixAt(k, _m().compose(_p, _q, _s));
+      addProp(s.x, s.z, 0.45);
+    });
+    trunks.instanceMatrix.needsUpdate = true; canopies.instanceMatrix.needsUpdate = true;
+    scene.add(trunks); scene.add(canopies);
   }
   const townInst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ map: townTex }), blocks.length);
   // ROOT CAUSE of the Palmetto Flats black slabs: this was the ONLY
@@ -1285,6 +1454,101 @@ function buildPeninsula(scene, rng) {
   if (townInst.instanceColor) townInst.instanceColor.needsUpdate = true;
   townCaps.instanceMatrix.needsUpdate = true;
   scene.add(townInst); scene.add(townCaps);
+
+  // ---- Roadside tissue (round 5) ------------------------------------------
+  // Farms, a trailer cluster, rest stops and billboards strung along the
+  // highway so the long drive north is not dead land. Everything here runs
+  // on its OWN seeded rng stream, placed after every town/cluster above,
+  // so no existing placement shifts. Solid structures push a collider AND
+  // a building record from the same numbers (no ghosts); small props go
+  // through addProp. Every placement clears the highway band (|x| <= 7.5)
+  // by a margin.
+  const rrng = makeRng(555001);
+  const capMat = mat(0x3d4454), postMat = mat(0x2f3542);
+  function solidBox(x, z, w, d, h, color) {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+    body.position.set(x, h / 2, z); scene.add(body);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.7, 0.5, d + 0.7), capMat);
+    cap.position.set(x, h + 0.25, z); scene.add(cap);
+    colliders.push({ x, z, hw: w / 2, hd: d / 2 });
+    buildingRecords.push({ x, z, hw: w / 2, hd: d / 2 });
+    buildingCounts['Roadside'] = (buildingCounts['Roadside'] || 0) + 1;
+  }
+  function roadLamp(x, z) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5.6, 5), postMat);
+    pole.position.set(x, 2.8, z); scene.add(pole);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 6, 5), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
+    head.position.set(x, 5.8, z); scene.add(head);
+    addProp(x, z, 0.3);
+  }
+  function roadSign(x, z, text, boardW = 11) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 4.6, 5), postMat);
+    post.position.set(x, 2.3, z); scene.add(post); addProp(x, z, 0.3);
+    const s = signMesh(text, '#ffe9a8', '#243014', boardW, 2.6);
+    s.position.set(x, 5.2, z); scene.add(s);
+  }
+  function picnicTable(x, z) {
+    const top = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.14, 1.2), mat(0x8a5a2b));
+    top.position.set(x, 0.78, z); scene.add(top);
+    for (const s of [-1, 1]) {
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.1, 0.4), mat(0x8a5a2b));
+      bench.position.set(x, 0.45, z + s * 0.95); scene.add(bench);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.78, 0.9), postMat);
+      leg.position.set(x + s * 0.9, 0.39, z); scene.add(leg);
+    }
+    addProp(x, z, 1.3);
+  }
+  function farm(cx, cz, side) { // side: -1 west of the highway, +1 east
+    solidBox(cx, cz, 12, 10, 7, 0x8a3b2e); // the barn, red-brown with its cap
+    const siloX = cx - side * 11;
+    const silo = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 11, 10), mat(0xb8bec8));
+    silo.position.set(siloX, 5.5, cz); scene.add(silo);
+    const siloTop = new THREE.Mesh(new THREE.ConeGeometry(2.4, 1.8, 10), capMat);
+    siloTop.position.set(siloX, 11.9, cz); scene.add(siloTop);
+    addProp(siloX, cz, 2.4);
+    const field = new THREE.Mesh(new THREE.PlaneGeometry(34, 20), mat(0x2e5d33));
+    field.rotation.x = -Math.PI / 2; field.position.set(cx, 0.01, cz + 21); scene.add(field);
+    // Fence line of posts along the road frontage.
+    const fx = side * 13, posts = [];
+    for (let z = cz - 26; z <= cz + 26; z += 5.2) posts.push(z + (rrng() - 0.5) * 0.6);
+    const postInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 1.15, 0.22), mat(0x6d4c41), posts.length);
+    posts.forEach((z, k) => {
+      _p.set(fx, 0.57, z); _s.set(1, 1, 1); postInst.setMatrixAt(k, _m().compose(_p, _q, _s));
+      addProp(fx, z, 0.28);
+    });
+    postInst.instanceMatrix.needsUpdate = true; scene.add(postInst);
+  }
+  farm(-34, -600, -1);   // west farm, z ~ -600
+  farm(34, -2450, 1);    // east farm, z ~ -2450
+  // Trailer cluster: three pastel trailers east of the highway at z ~ -1750.
+  const trailerTints = [0xfec8a0, 0xa0e8dd, 0xfff3b0];
+  [[40, -1760], [56, -1746], [70, -1762]].forEach(([x, z], i) => {
+    solidBox(x, z, 9, 3.5, 3.2, pick(rrng, trailerTints));
+  });
+  roadLamp(48, -1752);
+  // Rest stops: asphalt pad just off the highway edge, sign, lamps, table.
+  function restStop(cx, cz, side) {
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(25, 18), mat(0x39404d));
+    pad.rotation.x = -Math.PI / 2; pad.position.set(cx, 0.015, cz); scene.add(pad);
+    roadSign(side * 10.5, cz + (side < 0 ? 12 : -12), 'REST STOP', 10);
+    roadLamp(cx - 7, cz - 8); roadLamp(cx + 7, cz + 8);
+    picnicTable(cx + 3, cz);
+  }
+  restStop(-21, -1050, -1); // west
+  restStop(21, -3050, 1);   // east
+  // Billboards along the drive, alternating sides, boards riding high on
+  // solid posts at |x| ~ 17 (no building collider on the board itself).
+  const BOARDS = [
+    [-500, 1, 'MIND THE GATORS'], [-1100, -1, 'LAKE OKEECHOBEE'], [-1700, 1, 'EAT — CYPRESS DINER'],
+    [-2300, -1, 'PALMETTO FLATS · MOTEL'], [-2900, 1, 'GAS · FOOD · LODGING'], [-3500, -1, 'TALLAHASSEE PALMS'],
+  ];
+  for (const [z, side, text] of BOARDS) {
+    const x = side * 17;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 7.4, 6), postMat);
+    post.position.set(x, 3.7, z); scene.add(post); addProp(x, z, 0.4);
+    const board = signMesh(text, '#ffd32a', '#14101f', 15, 3.2);
+    board.position.set(x, 8.6, z); scene.add(board);
+  }
 }
 
 // ---- People ---------------------------------------------------------------

@@ -35,6 +35,32 @@ export function buildPeds(scene, seed) {
       flee: 0, flagged: false, swing: rng() * 6, down: 0, idle: rng() * 6,
     });
   }
+  // Town strollers (Round 5): the three peninsula towns each get a small
+  // crowd walking their main street. They carry their own stroll range
+  // (lo/hi — the town's x extent shrunk by ~10) and a town flag: updatePeds
+  // clamps them around their own street instead of the city plateau, and
+  // ejectDriver never steals one. Their sidewalk offset is tighter than
+  // the city's (off = side * 7): town streets are narrower (halfW 5) and
+  // the fronting buildings start ~8 units from the centre-line, so the
+  // city offset of 10 would walk them through the shopfronts.
+  const TOWNS = [
+    { line: -1420, lo: -90, hi: 90 },   // PALMETTO FLATS, x -100..100
+    { line: -2080, lo: -90, hi: 90 },   // CYPRESS JUNCTION, x -100..100
+    { line: -4180, lo: -140, hi: 140 }, // TALLAHASSEE PALMS, x -150..150
+  ];
+  for (const tw of TOWNS) {
+    for (let i = 0; i < 4; i++) {
+      const mesh = makePerson(pick(rng, SHIRTS), pick(rng, SHIRTS), pick(rng, SKIN));
+      scene.add(mesh);
+      const side = i % 2 ? 1 : -1;
+      peds.push({
+        mesh, axis: 'x', line: tw.line, side,
+        t: tw.lo + rng() * (tw.hi - tw.lo), dir: rng() < 0.5 ? 1 : -1,
+        speed: 1.6 + rng() * 1.2, flee: 0, flagged: false, swing: rng() * 6,
+        down: 0, idle: rng() * 6, lo: tw.lo, hi: tw.hi, town: true, off: side * 7,
+      });
+    }
+  }
 }
 
 export function updatePeds(dt, dangerPos, dangerRadius) {
@@ -46,6 +72,9 @@ export function updatePeds(dt, dangerPos, dangerRadius) {
       continue;
     }
     const pos = p.mesh.position;
+    // Stroll range: town peds bounce inside their own lo/hi; everyone else
+    // keeps the historic plateau range.
+    const lo = p.lo != null ? p.lo : -195, hi = p.hi != null ? p.hi : 195;
     let sp = p.speed;
     let running = false;
     // A ped with its own scare (an ejected driver fleeing his thief) runs
@@ -64,20 +93,25 @@ export function updatePeds(dt, dangerPos, dangerRadius) {
       p.mesh.rotation.y = Math.atan2(dx, dz);
       // Keep the stroll route under the ped's feet, so when the scare
       // ends it resumes walking from here instead of snapping back.
-      if (p.axis === 'x') p.t = Math.max(-195, Math.min(195, pos.x));
-      else p.t = Math.max(-195, Math.min(195, pos.z));
+      if (p.axis === 'x') p.t = Math.max(lo, Math.min(hi, pos.x));
+      else p.t = Math.max(lo, Math.min(hi, pos.z));
       if (p.flee <= 0) p.fleeFrom = null;
     } else {
       if (p.flee > 0) p.flee -= dt;
       p.t += sp * p.dir * dt;
-      if (p.t > 195) p.dir = -1;
-      if (p.t < -195) p.dir = 1;
-      const off = p.side * (ROAD_W / 2 + 2.5);
+      if (p.t > hi) p.dir = -1;
+      if (p.t < lo) p.dir = 1;
+      const off = p.off != null ? p.off : p.side * (ROAD_W / 2 + 2.5);
       if (p.axis === 'x') { pos.set(p.t, 0.3, p.line + off); p.mesh.rotation.y = p.dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
       else { pos.set(p.line + off, 0.3, p.t); p.mesh.rotation.y = p.dir > 0 ? 0 : Math.PI; }
     }
     pos.x = Math.max(-230, Math.min(230, pos.x));
-    pos.z = Math.max(-198, Math.min(430, pos.z));
+    // Town peds live thousands of units north of the plateau: the city
+    // z-clamp would yank them straight back to Palm Cove, so they clamp
+    // around their own main street instead (±16 — room to flee across
+    // the street and the sidewalks, never out of town).
+    if (p.town) pos.z = Math.max(p.line - 16, Math.min(p.line + 16, pos.z));
+    else pos.z = Math.max(-198, Math.min(430, pos.z));
     collideProps(pos, 0.35); // step around lamps, trees and hydrants
     // Player separation (Round 4): a stroll route or flee vector can carry
     // a ped straight through the player's space — peds yield, the player

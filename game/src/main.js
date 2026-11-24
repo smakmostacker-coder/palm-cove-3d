@@ -92,6 +92,15 @@ function enforceChrome() {
   if (joyEl.style.display !== joyWant) joyEl.style.display = joyWant;
   const btnsWant = joyOn ? 'flex' : 'none';
   if (joyBtnsEl.style.display !== btnsWant) joyBtnsEl.style.display = btnsWant;
+  // RUN and GAS swap by mode: RUN is the on-foot sprint button, GAS is
+  // the driving boost button — only the one that applies is shown.
+  const runEl = $('joyRun'), gasEl = $('joyGas');
+  if (runEl && gasEl) {
+    const runWant = G.driving ? 'none' : '';
+    const gasWant = G.driving ? '' : 'none';
+    if (runEl.style.display !== runWant) runEl.style.display = runWant;
+    if (gasEl.style.display !== gasWant) gasEl.style.display = gasWant;
+  }
 }
 onGraphics((s) => {
   if (s.quality === 'hd') { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); if (scene.fog) scene.fog.far = 560; camera.far = 760; }
@@ -411,7 +420,7 @@ const TUT_STEPS = [
   { d: 'Interact — E at doors, shops and cars. Head out of the house', t: 'Interact — tap E at doors, shops and cars. Head out of the house', done: () => tutFlags.interacted },
   { d: 'Hotbar — press 1–5 to select a slot, X uses an item', t: 'Hotbar — tap a slot to select it, X uses an item', done: () => tutFlags.slot },
   { d: 'Steal a vehicle — walk to a car and press E', t: 'Steal a vehicle — walk to a car and tap E', done: () => !!G.driving },
-  { d: 'Drive — W A S D, E gets out', t: 'Drive — joystick steers, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
+  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — joystick steers · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
   { d: 'Fight — F punches · mouse click fires an equipped weapon', t: 'Fight — F punches · the fire button shoots an equipped weapon', done: () => tutFlags.combat },
 ];
 function updateTutorial() {
@@ -530,9 +539,14 @@ addEventListener('resize', () => {
 // G.joyVec and player.js reads direction + magnitude from it. (It used
 // to threshold the stick into WASD keys at 0.35, so a thumb hovering
 // near the threshold flickered A/D on and off and the walk veered
-// constantly.) While driving, the legacy key mapping stays, because
-// driving.js steers from the keys. Buttons fire the same actions as
-// the keyboard, including the hold-to-sprint RUN button (G.sprintTouch).
+// constantly.) Driving reads the SAME vector proportionally in
+// driving.js (stick Y = throttle, stick X = steering, per-axis
+// deadzone) — it must NOT be thresholded into keys any more: that
+// mapping was the "tilt a little, rocket off" bug, any forward tilt
+// became a held KeyW at full throttle. Buttons fire the same actions
+// as the keyboard, including the hold-to-sprint RUN button
+// (G.sprintTouch) and the driving-only hold-to-boost GAS button
+// (G.boostTouch).
 (function initJoystick() {
   const base = $('joy'), knob = $('joyKnob');
   let pid = null;
@@ -552,7 +566,8 @@ addEventListener('resize', () => {
     if (l > 1) { dx /= l; dy /= l; }
     knob.style.transform = 'translate(calc(-50% + ' + dx * 34 + 'px), calc(-50% + ' + dy * 34 + 'px))';
     G.joyVec.x = dx; G.joyVec.y = dy;
-    if (G.driving) setKeys(dx, dy);
+    // No setKeys() here: on foot player.js reads joyVec, and driving.js
+    // reads joyVec proportionally — neither wants binary keys any more.
   }
   $('joyRadio').onclick = () => { if (G.mode === 'playing') cycleRadio(); };
   $('joyE').onclick = () => { if (G.mode === 'playing') doInteract(); };
@@ -564,6 +579,13 @@ addEventListener('resize', () => {
     run.addEventListener('pointerup', () => { G.sprintTouch = false; });
     run.addEventListener('pointercancel', () => { G.sprintTouch = false; });
     run.addEventListener('pointerleave', () => { G.sprintTouch = false; });
+  }
+  const gas = $('joyGas');
+  if (gas) {
+    gas.addEventListener('pointerdown', (e) => { e.preventDefault(); G.boostTouch = true; });
+    gas.addEventListener('pointerup', () => { G.boostTouch = false; });
+    gas.addEventListener('pointercancel', () => { G.boostTouch = false; });
+    gas.addEventListener('pointerleave', () => { G.boostTouch = false; });
   }
 })();
 

@@ -8,10 +8,10 @@
 // southern tip, marsh, the long spine, the panhandle, the Keys arc.
 import { G } from './state.js';
 import { ROADS, WORLD, KEYS, MARSH } from './config.js';
-import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, DIAG_SEG, PROM_POINTS, landHalfWidthAt, buildingRecords, MARSH_CHANNELS, MARSH_ROAD, FLYOVER_SEG, LAKE_OKEECHOBEE } from './city.js'; // PANHANDLE_Z: coastPoly's breakpoint list
+import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, TOWN_STREETS, DIAG_SEG, PROM_POINTS, landHalfWidthAt, buildingRecords, MARSH_CHANNELS, MARSH_ROAD, FLYOVER_SEG, LAKE_OKEECHOBEE } from './city.js'; // PANHANDLE_Z: coastPoly's breakpoint list
 import { ITEM_DEFS } from './inventory.js';
 import { HOME, FACILITIES, ENTERABLES, PLACES, PRISON } from './facilities.js';
-import { settings } from './settings.js';
+import { settings, saveSettings } from './settings.js';
 
 const el = {};
 export function initHud() {
@@ -20,7 +20,41 @@ export function initHud() {
   }
   el.map = document.getElementById('minimap');
   el.mapCtx = el.map.getContext('2d');
+  el.zoomBtn = document.getElementById('zoomBtn');
+  if (el.zoomBtn) {
+    syncZoomBtn();
+    // A plain click (touch taps synthesize one): cycles the level without
+    // touching the minimap canvas's own tap-to-full-map handler.
+    el.zoomBtn.addEventListener('click', () => cycleMapZoom());
+  }
   buildHotbar();
+}
+
+// ---- Minimap zoom -----------------------------------------------------------
+// Three window sizes for the local minimap, cycled by the ZOOM button beside
+// it and persisted as settings.mapZoom (index into this table). Mid is the
+// original Palm Cove window. drawFloridaMap is fully data-driven and clips
+// to whatever view it is handed, so every level renders the same world.
+export const MAP_ZOOM_LEVELS = [
+  { name: 'NEAR', halfW: 30, halfH: 38 },
+  { name: 'MID', halfW: 55, halfH: 70 },
+  { name: 'FAR', halfW: 110, halfH: 140 },
+];
+export function mapZoomIndex() {
+  const i = settings.mapZoom | 0;
+  return i >= 0 && i < MAP_ZOOM_LEVELS.length ? i : 1;
+}
+let lastZoomLabel = '';
+export function syncZoomBtn() {
+  if (!el.zoomBtn) return;
+  const label = 'ZOOM · ' + MAP_ZOOM_LEVELS[mapZoomIndex()].name;
+  if (label !== lastZoomLabel) { lastZoomLabel = label; el.zoomBtn.textContent = label; }
+}
+export function cycleMapZoom() {
+  settings.mapZoom = (mapZoomIndex() + 1) % MAP_ZOOM_LEVELS.length;
+  saveSettings();
+  syncZoomBtn();
+  return settings.mapZoom;
 }
 
 function buildHotbar() {
@@ -197,6 +231,10 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
     if (s.axis === 'ns') { c.moveTo(px(s.at), pz(s.from)); c.lineTo(px(s.at), pz(s.to)); }
     else { c.moveTo(px(s.from), pz(s.at)); c.lineTo(px(s.to), pz(s.at)); }
   }
+  for (const s of TOWN_STREETS) {
+    if (s.axis === 'ns') { c.moveTo(px(s.at), pz(s.from)); c.lineTo(px(s.at), pz(s.to)); }
+    else { c.moveTo(px(s.from), pz(s.at)); c.lineTo(px(s.to), pz(s.at)); }
+  }
   c.moveTo(px(DIAG_SEG.x1), pz(DIAG_SEG.z1)); c.lineTo(px(DIAG_SEG.x2), pz(DIAG_SEG.z2));
   c.stroke();
   c.strokeStyle = '#f2d492';
@@ -273,8 +311,11 @@ export function drawFloridaMap(c, S, W2, playerPos, targetPos, copPositions, vie
 }
 
 function drawMinimap(playerPos, targetPos, copPositions) {
-  // A local window: 110 units across, 140 deep, centred on the player.
-  const view = { cx: playerPos.x, cz: playerPos.z, halfW: 55, halfH: 70 };
+  // A local window centred on the player, sized by the persisted zoom
+  // level (NEAR 60×76, MID 110×140, FAR 220×280 world units).
+  syncZoomBtn(); // keep the button label honest if settings changed elsewhere
+  const lvl = MAP_ZOOM_LEVELS[mapZoomIndex()];
+  const view = { cx: playerPos.x, cz: playerPos.z, halfW: lvl.halfW, halfH: lvl.halfH };
   drawFloridaMap(el.mapCtx, el.map.height, el.map.width, playerPos, targetPos, copPositions, view);
 }
 

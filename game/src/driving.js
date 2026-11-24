@@ -116,19 +116,61 @@ export function exitCar() {
 }
 
 let crashCooldown = 0;
+// GAS boost: while Space (or the touch GAS button) is held, accel and
+// top speed scale by this — a boosted car (22 × 1.55 ≈ 34) matches the
+// old pre-retune pace. No fuel, no cooldown.
+export const BOOST_MULT = 1.55;
+// Per-axis analog deadzone, rescaled to 0..1 past it — the same 0.18 the
+// on-foot joystick uses (player.js). Axes are read independently: stick
+// X only steers, stick Y only throttles.
+function joyAxis(v) {
+  const a = Math.abs(v || 0);
+  if (a <= 0.18) return 0;
+  return Math.sign(v) * Math.min(1, (a - 0.18) / 0.82);
+}
 export function updateDriving(dt, camera, onCrash) {
   const car = G.driving;
   if (!car) return;
   const H = HANDLING[car.kind] || HANDLING.car;
   const k = G.keys;
-  const accel = k['KeyW'] || k['ArrowUp'] ? H.accel : 0;
-  const brake = k['KeyS'] ? H.accel * 0.9 : 0;
+  const boost = !!(k['Space'] || G.boostTouch);
+  car.boosting = boost;
+  const effAccel = H.accel * (boost ? BOOST_MULT : 1);
+  const effMax = H.max * (boost ? BOOST_MULT : 1);
+  const effReverse = H.reverse * (boost ? BOOST_MULT : 1);
+  // Throttle in [-1, 1]: keyboard is binary (±1); the analog stick is
+  // proportional — a small tilt asks for a small target speed and can
+  // never pass the (unboosted) cap on its own. GAS is the only way past
+  // base. Keyboard wins when both are present.
+  let throttle = 0;
+  if (k['KeyW'] || k['ArrowUp']) throttle = 1;
+  else if (k['KeyS']) throttle = -1;
+  else throttle = -joyAxis(G.joyVec ? G.joyVec.y : 0);
   if (car.burning || car.burnt) car.speed *= Math.max(0, 1 - 3 * dt);
-  else if (accel) car.speed = Math.min(H.max, car.speed + accel * dt);
-  else if (brake) car.speed = Math.max(-H.reverse, car.speed - brake * dt);
+  else if (throttle !== 0) {
+    // Accelerate toward the throttle's target speed without overshoot:
+    // full input reproduces the old accel ramp to the cap, partial stick
+    // settles at throttle × cap, and releasing GAS eases a boosted car
+    // back down to base instead of snapping.
+    const target = throttle > 0 ? throttle * effMax : throttle * effReverse;
+    const rate = effAccel * (throttle > 0 ? 1 : 0.9) * dt;
+    car.speed += Math.max(-rate, Math.min(rate, target - car.speed));
+  }
   else { car.speed *= Math.max(0, 1 - 0.7 * dt); if (Math.abs(car.speed) < 0.05) car.speed = 0; }
-  const steer = (k['KeyA'] ? 1 : 0) - (k['KeyD'] ? 1 : 0);
-  if (car.speed !== 0) car.angle += steer * dt * H.turn * Math.sign(car.speed) * Math.min(1, Math.abs(car.speed) / 10);
+  // Steering in [-1, 1]: keyboard binary, stick X proportional (stick
+  // right = KeyD = steer −1 in this convention).
+  let steer = (k['KeyA'] ? 1 : 0) - (k['KeyD'] ? 1 : 0);
+  if (steer === 0) steer = -joyAxis(G.joyVec ? G.joyVec.x : 0);
+  if (car.speed !== 0) {
+    // Speed-aware yaw: the old min(1, |speed|/10) factor gave the FULL
+    // turn rate at any speed ≥ 10, which at the old 34 u/s was twitchy.
+    // Now the rate still ramps in gently at crawl (precise parking), but
+    // TAPERS above ~6 u/s, so at base top speed a held turn describes a
+    // wide, stable arc instead of spinning the car around.
+    const sp = Math.abs(car.speed);
+    const taper = 1 / (1 + Math.max(0, sp - 6) / 10);
+    car.angle += steer * dt * H.turn * Math.sign(car.speed) * Math.min(1, sp / 10) * taper;
+  }
   const fx = Math.sin(car.angle), fz = Math.cos(car.angle);
   G.stats.drivenKm += Math.abs(car.speed) * dt / 1000;
   const radius = car.kind === 'truck' || car.kind === 'firetruck' ? 2.2 : 1.6;

@@ -49,6 +49,8 @@ export const G = {
   fpsFrames: 0,
   keys: {},
   joyVec: { x: 0, y: 0 }, // continuous analog joystick vector (main.js initJoystick)
+  sprintTouch: false, // touch RUN button held (main.js initJoystick)
+  boostTouch: false, // touch GAS button held, driving only (main.js initJoystick)
   mouseDown: false,
 };
 

@@ -35,20 +35,20 @@ export function buildTraffic(scene, seed) {
     Object.assign(v, {
       axis: horiz ? 'x' : 'z', line: pick(rng, ROADS),
       t: -190 + rng() * 380, dir: rng() < 0.5 ? 1 : -1,
-      speed: kind === 'moto' ? 13 + rng() * 6 : kind === 'truck' ? 6 + rng() * 3 : 9 + rng() * 7,
+      speed: (kind === 'moto' ? 13 + rng() * 6 : kind === 'truck' ? 6 + rng() * 3 : 9 + rng() * 7) * 0.8, // round 5: AI traffic ~20% slower, in step with the calmer player handling
       stopped: 0, highway: false,
     });
     trafficCars.push(v);
   });
   // Highway runners: sparse traffic for the long drive north.
-  for (let i = 0; i < 5; i++) {
-    const kind = i === 4 ? 'truck' : 'car';
+  for (let i = 0; i < 7; i++) {
+    const kind = i === 4 || i === 6 ? 'truck' : 'car';
     const mesh = makeVehicle(kind, pick(rng, COLORS), {});
     scene.add(mesh);
     const v = veh(mesh, kind, kind);
     Object.assign(v, {
       axis: 'z', line: 0, t: -400 - rng() * 3400, dir: rng() < 0.5 ? 1 : -1,
-      speed: 15 + rng() * 7, stopped: 0, highway: true,
+      speed: (15 + rng() * 7) * 0.8, stopped: 0, highway: true, // round 5: ~20% slower, as city traffic
     });
     trafficCars.push(v);
   }
@@ -68,6 +68,20 @@ export function buildTraffic(scene, seed) {
     { x: 2, z: 392, angle: 0, kind: 'car' }, { x: -10, z: 262, angle: Math.PI, kind: 'moto' },
     { x: 6, z: -1400, angle: 0, kind: 'car' }, { x: -6, z: -3960, angle: Math.PI, kind: 'car' },
     { x: 8, z: -4190, angle: 0, kind: 'truck' },
+    // Town parked cars (Round 5): 3 per peninsula town, at the main-street
+    // edge (z = line ± 6.5), aligned with the EW street. Every x below was
+    // picked from the seeded build's collider list: the car's footprint
+    // (x ± 2.4, z ± 1.0) sits >= 3 units from every building AABB and from
+    // the facility doors, clear of the NS cross streets (x ±38 / ±45).
+    // PALMETTO FLATS (z=-1420; doors MART 17 / MOTEL 51 at z=-1425.8):
+    { x: -82, z: -1426.5, angle: Math.PI / 2, kind: 'car' }, { x: -2, z: -1413.5, angle: -Math.PI / 2, kind: 'car' },
+    { x: 90, z: -1426.5, angle: Math.PI / 2, kind: 'car' },
+    // CYPRESS JUNCTION (z=-2080; doors GAS -24 / DINER 67 at z=-2085.8):
+    { x: -79, z: -2086.5, angle: Math.PI / 2, kind: 'car' }, { x: -2, z: -2073.5, angle: -Math.PI / 2, kind: 'car' },
+    { x: 89, z: -2086.5, angle: Math.PI / 2, kind: 'car' },
+    // TALLAHASSEE PALMS (z=-4180; doors APOTIK -129 / MOTEL -113 at z=-4185.8):
+    { x: -75, z: -4186.5, angle: Math.PI / 2, kind: 'car' }, { x: 25, z: -4173.5, angle: -Math.PI / 2, kind: 'car' },
+    { x: 113, z: -4186.5, angle: Math.PI / 2, kind: 'car' },
   ];
   const NAMES = { car: 'car', moto: 'motorcycle', truck: 'truck', police: 'police car', firetruck: 'fire truck' };
   spots.forEach((s, i) => {
@@ -133,7 +147,7 @@ export function allVehicles() {
 export function ejectDriver(c) {
   let best = null, bd = -1;
   for (const p of peds) {
-    if (p.flagged || p.down > 0) continue;
+    if (p.flagged || p.down > 0 || p.town) continue; // town peds stay in their town — never stolen as a jacked driver
     const d = p.mesh.position.distanceTo(c.pos);
     if (d > bd) { bd = d; best = p; }
   }

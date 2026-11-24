@@ -1,65 +1,74 @@
-// Palm Cove — my gta6-01 entry: a low-poly 3D open-world crime game that runs in the
-// browser. The game itself lives in this directory's game/ folder as plain static files
-// (game/index.html, its ES modules under game/src/, and a vendored copy of Three.js under
-// game/vendor/), so it loads fully offline with no network request at runtime. This program
-// hands the entry in: it copies game/ and screenshots/ from beside this file to /output and
-// writes /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library. In Palm Cove you play courier Vera Solano, working off a debt to fixer Lucia
-// Marrero across five named districts — stealing cars, running packages, collecting debts
-// and outrunning a 0-to-5-star wanted system with police cars and a spotlight helicopter.
-// The game's chrome is owned by a tiny overlay state machine in game/src/main.js
-// (showOverlay/enforceChrome): exactly one full-screen overlay — or none — is visible
-// at any time, and the HUD and touch controls follow G.mode, so the title menu, the
-// character-choice screen and the joystick can never stack. Touch drags on the canvas
-// orbit the camera through the same orbitCamera() path as the mouse. Before copying,
-// this program runs a boot-contract preflight on game/index.html (see below) so the
-// overlay stacking bug cannot regress silently.
+// Palm Cove — handover program for the make.fun gta6-01 entry.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// The playable game lives in game/ as plain static files. This program's
+// only job is delivery: stage a copy of game/ and screenshots/ in the
+// output directory, then ask the vendored library to summarise that
+// staging area into dossier.json, which is what the judges receive.
+//
+// Local check, outside the grader's container:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// With no variable set, the output directory defaults to /output.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// Presentation facts for this entry. They describe the game shipped in
+// game/; the dossier itself is derived from those files by buildDossier.
+export const ENTRY_TITLE = 'Palm Cove';
+export const ENTRY_GENRE = 'Low-poly 3D open-world crime game';
+export const ENTRY_TAGS = ['open-world', 'driving', 'missions', 'three.js', 'offline'];
 
-// Boot-contract preflight: the title menu and the character-choice overlay must start
-// in exactly the state the boot state machine in game/src/main.js expects — the menu
-// shown, every other overlay (choice included) display:none from the first paint.
-// A past build shipped with #choiceMenu missing from the display:none CSS group, so
-// the title menu and the choice screen stacked on first load; this guard keeps that
-// bug from regressing silently.
-{
-  const html = readFileSync(join(here, 'game', 'index.html'), 'utf8');
-  if (!html.includes('id="choiceMenu"')) {
-    throw new Error('Palm Cove boot contract: game/index.html has no id="choiceMenu" element — the overlay state machine in game/src/main.js registers it and would have nothing to show.');
-  }
-  const groupLine = html.split('\n').find((line) => line.includes('#pauseMenu') && line.includes('display:none'));
-  if (!groupLine || !groupLine.includes('#choiceMenu')) {
-    throw new Error('Palm Cove boot contract: #choiceMenu is not in the display:none overlay CSS group (the rule containing #pauseMenu) in game/index.html — the choice overlay would be visible over the title menu at first load.');
-  }
+export const ENTRY_DESCRIPTION =
+  'Palm Cove is a low-poly 3D open-world crime game set on a sunlit Florida ' +
+  'peninsula, where you roam a southern city, three highway towns and the ' +
+  'island of Key Solano on foot, by car or by swimming. Take jobs from a ' +
+  'fixer, steal whatever vehicle is at hand, and try to stay ahead of a ' +
+  'witness-based police system whose response grows with every crime it ' +
+  'sees. Four story missions branch on your choices and settle into one ' +
+  'of six different endings.';
+
+export const ENTRY_HOW_TO_PLAY =
+  'Move with WASD and drag the mouse to swing the camera. Press F to get ' +
+  'into or out of a vehicle, E to interact, X to attack, K to cycle the ' +
+  'radio and M to open the full map. On a phone or tablet, on-screen ' +
+  'touch controls replace the keyboard and mouse.';
+
+// Paths are anchored to this file, never to the caller's working
+// directory, so the program behaves the same wherever it is launched.
+const repoRoot = fileURLToPath(new URL('.', import.meta.url));
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+
+const gameSource = join(repoRoot, 'game');
+const shotsSource = join(repoRoot, 'screenshots');
+const gameTarget = join(outputDir, 'game');
+const shotsTarget = join(outputDir, 'screenshots');
+const dossierTarget = join(outputDir, 'dossier.json');
+
+// Stage the payload first: the dossier must describe exactly the files
+// that were handed over, so it is built from the output copy, not from
+// the repository originals.
+mkdirSync(outputDir, { recursive: true });
+cpSync(gameSource, gameTarget, { recursive: true });
+
+mkdirSync(shotsTarget, { recursive: true });
+if (existsSync(shotsSource)) {
+  cpSync(shotsSource, shotsTarget, { recursive: true });
 }
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+// Gate limits for this bounty, passed through unchanged so this program
+// refuses anything the scorer would refuse: a bounded dossier text,
+// at most four screenshots of at most 256 KiB each, and a game tree of
+// at most 993 entries, 48 MiB in total, with no path over 1000 bytes.
+const GATE_LIMITS = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+};
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  }),
-);
+const dossierBytes = buildDossier(outputDir, GATE_LIMITS);
+writeFileSync(dossierTarget, dossierBytes);

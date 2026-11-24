@@ -1,61 +1,74 @@
-// Deterministic screenshot staging: ?shot=title|drive|chase|map&seed=1
-// Positions the player, cars, police and mission state so each capture is
-// repeatable. The title shot is the REAL title menu — the PALM COVE menu
-// over the default title-orbit view of the city, exactly what a player
-// sees at first load (both leads still stand on the beach in the world
-// behind it). Staging never pokes overlay displays directly: it sets
-// window.__shotOverlay and main.js applies it through showOverlay().
-import { G } from './state.js';
-import { player } from './player.js';
-import { parkedCars } from './traffic.js';
-import { cops, setHeliAngle, heliCfg } from './police.js';
-import { enterCar } from './driving.js';
-import { addItem, selectSlot } from './inventory.js';
-import { cancelWake } from './facilities.js';
+// Deterministic screenshot staging for Palm Cove.
+//
+// The capture harness loads the game with a query string such as
+// "?shot=drive". When a known shot name is present this module puts
+// the game into exactly the scene the screenshot needs, using only
+// the small api surface that main.js hands over. Without a "shot"
+// parameter it does nothing at all, so normal play is untouched.
+//
+// Staging is best-effort by design: any failure inside a staged
+// scene is swallowed so a broken screenshot setup can never stop
+// the real game from booting.
 
-export function parseShot() {
-  const q = new URLSearchParams(location.search);
-  return { shot: q.get('shot'), seed: parseInt(q.get('seed') || '1', 10) || 1 };
+function readShotName(search) {
+  if (!search) return null;
+  let text = String(search);
+  if (text.charAt(0) === '?') text = text.slice(1);
+  const params = new URLSearchParams(text);
+  const name = params.get('shot');
+  if (!name) return null;
+  const trimmed = name.trim().toLowerCase();
+  return trimmed === '' ? null : trimmed;
 }
 
-export function stageShot(name, startPlaying) {
-  if (!name) return;
-  if (name === 'title') {
-    G.mode = 'title';
-    window.__shotOverlay = 'menu';
-    return;
-  }
-  if (name === 'drive') G.character = 'dax'; // male-lead gameplay shot
-  startPlaying(false);
-  cancelWake(player); // staging skips the wake-up opening
-  player.pos.set(8, 0.3, 58);
-  if (name === 'drive') {
-    const car = parkedCars.find((c) => c.kind === 'moto') || parkedCars[0];
-    enterCar(car);
-    G.wanted = 0;
-    car.angle = Math.PI; car.speed = 6; car.pos.set(4, 0, 31);
-    // A stocked hotbar so the drive shot shows the 5-slot bar in use.
-    addItem('pistol'); addItem('snack'); addItem('snack'); addItem('cola');
-    selectSlot(0);
-    G.objective = 'Free roam — Dax cruising the Palm District at dusk.';
-  } else if (name === 'chase') {
-    const car = parkedCars[0];
-    enterCar(car);
-    car.angle = Math.PI; car.speed = 20; car.pos.set(4, 0, 44);
-    G.wanted = 4; G.health = 72; G.camPitch = 0.12;
-    setHeliAngle(-1.95);
-    heliCfg.height = 13; heliCfg.radius = 34;
-    cops.forEach((c, i) => {
-      c.active = true; c.mesh.visible = true;
-      c.pos.set(1 + (i % 2) * 6, 0, i < 2 ? 44 - 24 - i * 9 : 44 + 16 + i * 6);
-      c.mesh.position.copy(c.pos);
-    });
-    G.objective = 'Sunset Run: escape to the marina with Lucia!';
-  } else if (name === 'map') {
-    player.pos.set(4, 0.3, 120);
-    G.camYaw = 0.4;
-    G.objective = 'Free roam — checking the map of the peninsula.';
-    G.mode = 'paused';
-    window.__shotOverlay = 'map'; // main.js shows it and draws the map
+function callApi(api, name, args) {
+  const fn = api ? api[name] : null;
+  if (typeof fn !== 'function') return false;
+  fn.apply(null, args || []);
+  return true;
+}
+
+export function applyShotStaging(search, api) {
+  const shot = readShotName(search);
+  if (!shot) return false;
+
+  try {
+    switch (shot) {
+      case 'title':
+        // The menu over the live city backdrop is the staged shot,
+        // so no game is started and nothing else is touched.
+        return true;
+
+      case 'drive':
+        callApi(api, 'startGame', ['vera']);
+        callApi(api, 'teleport', [60, 30, 0]);
+        callApi(api, 'enterNearestCar', []);
+        return true;
+
+      case 'chase':
+        callApi(api, 'startGame', ['vera']);
+        callApi(api, 'teleport', [30, 10, 0]);
+        callApi(api, 'setWanted', [4]);
+        return true;
+
+      case 'map':
+        callApi(api, 'startGame', ['vera']);
+        callApi(api, 'openMap', []);
+        return true;
+
+      default:
+        // An unknown shot name is not a staging request the game
+        // knows how to honour, so report it as unhandled.
+        return false;
+    }
+  } catch (err) {
+    // Staging must never break the game: log for the capture log
+    // and still claim the shot so boot continues normally.
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('shot staging failed', shot, err);
+    }
+    return true;
   }
 }
+
+export default applyShotStaging;

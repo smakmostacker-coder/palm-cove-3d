@@ -1,271 +1,384 @@
-// Driving: E enters or leaves the nearest vehicle of any class; each class
-// drives to its own handling line in config.js — motorcycles are fast and
-// twitchy with the rider visible, trucks are slow, heavy and hit harder,
-// police cars are quick pursuit sedans, the fire truck is a heavyweight.
-//
-// Impacts are honest now: buildings AND street props (trees, lamps, poles,
-// signs, hydrants) stop the car. collideBuildings() reports whether the
-// position had to be pushed out of a building; prop hits are detected by
-// sampling collideProps() the same way. Either way a fast impact costs
-// health, kills the speed (a glance or a bounce, class-dependent) and fires
-// the crash callback — a car never ghosts through a tree.
-import { G } from './state.js';
-import { HANDLING } from './config.js';
-import { collideBuildings, collideProps, groundHeightFor } from './city.js';
-import { parkedCars, trafficCars, ejectDriver } from './traffic.js';
-import { player, updateCamera, tickDragHold, dragHoldActive, wrapAngle } from './player.js';
-import { sfx } from './audio.js';
-import { commitCrime, jackableCop, onCopJacked, jackedCars } from './police.js';
+// driving.js - vehicles, player driving, and traffic steering helper.
+// Vehicles move every frame, so they never register static colliders;
+// collision is resolved per-frame against the world in city.js.
 
-export function nearestStealable() {
-  let best = null, bd = 4.6;
-  for (const c of parkedCars) {
-    if (c.taken || c.burnt) continue;
-    const d = c.pos.distanceTo(player.pos);
-    if (d < bd) { bd = d; best = c; }
+import { G } from './state.js';
+import {
+  TUNING,
+  VEHICLE_TYPES,
+  TOWNS,
+  FIRE_STATION,
+  MARINA,
+} from './config.js';
+import { makeCarMesh, collideWorld, floorHeight } from './city.js';
+import { commitCrime } from './police.js';
+import { sfx } from './audio.js';
+import { floatBetween, pickOne, chanceOf } from './random.js';
+
+// Every live vehicle in the world, parked, traffic, and player-driven.
+export const vehicles = [];
+
+// Paint palette shared by parked and traffic spawns so the city does
+// not end up as a row of identical sedans.
+const PAINT_COLORS = [
+  0xd94f3d,
+  0x3d7bd9,
+  0xf2c230,
+  0x39b56a,
+  0xe8e4da,
+  0x22242a,
+  0x8e44ad,
+  0xec7a1e,
+  0x17a2a8,
+  0xc0c6cc,
+  0x7a4a21,
+  0xd96aa0,
+];
+
+// Service liveries are fixed, not drawn from the civilian palette.
+const FIRE_COLOR = 0xc0271b;
+
+function clamp(value, lo, hi) {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+
+// Move a scalar toward a target by at most step, never overshooting,
+// so acceleration and braking feel linear instead of snapping.
+function approach(value, target, step) {
+  if (value < target) return Math.min(target, value + step);
+  if (value > target) return Math.max(target, value - step);
+  return target;
+}
+
+// Wrap an angle into -PI..PI so steering always takes the short way.
+function wrapAngle(angle) {
+  let a = angle;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+// Forward on the ground plane for a yaw angle; the car meshes are
+// modelled facing +Z, which is why x uses sin and z uses cos.
+function forwardOf(angle) {
+  return { x: Math.sin(angle), z: Math.cos(angle) };
+}
+
+function spinWheels(vehicle, dt) {
+  const wheels = vehicle.mesh.userData.wheels;
+  if (!wheels) return;
+  const spin = vehicle.speed * dt * 2;
+  for (let i = 0; i < wheels.length; i++) {
+    wheels[i].rotation.x += spin;
   }
-  for (const c of jackedCars) { // a cop car the player took earlier, now parked
-    if (c.taken || c.burnt) continue;
-    const d = c.pos.distanceTo(player.pos);
-    if (d < bd) { bd = d; best = c; }
+}
+
+// Ground the mesh with a little smoothing so ramps, bridges, and
+// floor changes do not pop the car in a single frame.
+function groundMesh(vehicle, dt) {
+  const pos = vehicle.mesh.position;
+  const targetY = floorHeight(pos.x, pos.z, pos.y);
+  if (dt > 0) {
+    const blend = Math.min(1, dt * 12);
+    pos.y += (targetY - pos.y) * blend;
+  } else {
+    pos.y = targetY;
+  }
+}
+
+function randomPaint() {
+  return pickOne(PAINT_COLORS);
+}
+
+// Internal spawn helper: builds the mesh, places it on the ground,
+// and registers the vehicle record. Shared by every spawn path.
+function makeVehicle(scene, type, x, z, angle, color) {
+  const def = VEHICLE_TYPES[type] || VEHICLE_TYPES.car;
+  const isPolice = type === 'police';
+  const isFire = type === 'firetruck';
+  const paint = color !== undefined ? color : randomPaint();
+  const mesh = makeCarMesh(paint, {
+    kind: type,
+    lightbar: isPolice,
+    cabColor: isFire ? FIRE_COLOR : undefined,
+  });
+  mesh.position.set(x, floorHeight(x, z, 0), z);
+  mesh.rotation.y = angle;
+  scene.add(mesh);
+  const vehicle = {
+    mesh,
+    pos: mesh.position,
+    angle,
+    speed: 0,
+    type,
+    def,
+    driver: null,
+    health: 100,
+    wrecked: false,
+  };
+  vehicles.push(vehicle);
+  return vehicle;
+}
+
+// Parked stock for the whole map: boulevard, towns, marina, club,
+// garage, and the fire station appliance.
+export function spawnVehicles(scene) {
+  // Boulevard parking lanes: seven a side, nose-in along the kerb so
+  // the player can always find a first car within a short walk.
+  for (let i = 0; i < 7; i++) {
+    const x = -168 + i * 52 + floatBetween(-6, 6);
+    makeVehicle(scene, 'car', x, 10.5, Math.PI / 2, randomPaint());
+  }
+  for (let i = 0; i < 7; i++) {
+    const x = -144 + i * 52 + floatBetween(-6, 6);
+    makeVehicle(scene, 'car', x, -10.5, -Math.PI / 2, randomPaint());
+  }
+
+  // One row per town on the main street edges, angled with the road
+  // so the highway towns do not look empty on a drive-through.
+  for (let t = 0; t < TOWNS.length; t++) {
+    const town = TOWNS[t];
+    for (let i = 0; i < 3; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const x = side * 10.5;
+      const z = town.z - 24 + i * 24 + floatBetween(-3, 3);
+      const angle = side < 0 ? Math.PI : 0;
+      makeVehicle(scene, 'car', x, z, angle, randomPaint());
+    }
+  }
+
+  // Marina pair, parked facing the water.
+  makeVehicle(scene, 'car', MARINA.x - 14, MARINA.z - 18, Math.PI, randomPaint());
+  makeVehicle(scene, 'car', MARINA.x - 8, MARINA.z - 18, Math.PI, randomPaint());
+
+  // Two motorbikes near the club; bikes are the fast, fragile option
+  // and belong where a quick getaway is thematically likely.
+  makeVehicle(scene, 'moto', 46, -86, floatBetween(-0.4, 0.4), randomPaint());
+  makeVehicle(scene, 'moto', 49, -84, floatBetween(-0.4, 0.4), randomPaint());
+
+  // The garage truck: slow and tough, useful as a battering ram.
+  makeVehicle(scene, 'truck', 82, 82, Math.PI / 4, randomPaint());
+
+  // The fire appliance lives at its station, ready to be borrowed
+  // at the higher wanted price enterVehicle charges for it.
+  makeVehicle(scene, 'firetruck', FIRE_STATION.x, FIRE_STATION.z, Math.PI, FIRE_COLOR);
+}
+
+// Traffic cars are ordinary vehicles whose driver flag hands their
+// steering over to traffic.js instead of the player input path.
+export function spawnTrafficCar(scene, x, z, angle) {
+  const type = chanceOf(0.18) ? 'moto' : 'car';
+  const vehicle = makeVehicle(scene, type, x, z, angle, randomPaint());
+  vehicle.driver = 'traffic';
+  return vehicle;
+}
+
+// Nearest usable vehicle to a point. Player-driven and wrecked cars
+// are excluded: one is already taken, the other will never move.
+export function nearestVehicle(pos, maxDist) {
+  let best = null;
+  let bestDist = maxDist;
+  for (let i = 0; i < vehicles.length; i++) {
+    const v = vehicles[i];
+    if (v.wrecked) continue;
+    if (v.driver === 'player') continue;
+    const dx = v.pos.x - pos.x;
+    const dz = v.pos.z - pos.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist <= bestDist) {
+      best = v;
+      bestDist = dist;
+    }
   }
   return best;
 }
 
-// The occupied vehicle the player can carjack right now: an active police
-// car (checked in police.js) or a traffic vehicle that is stopped or
-// crawling — red light, jam, nudged to a halt — with the player standing
-// at the driver's door. Moving traffic cannot be jacked.
-const JACK_NAMES = { car: 'car', moto: 'motorcycle', truck: 'truck' };
-export function nearestJackable() {
-  if (G.driving) return null;
-  const cop = jackableCop(player.pos);
-  if (cop) return { car: cop, cop: true, name: 'police car' };
-  let best = null, bd = 4.6;
-  for (const c of trafficCars) {
-    if (c.burnt || c.burning || (c.curSpeed || 0) > 2.5) continue;
-    const d = c.pos.distanceTo(player.pos);
-    if (d >= bd) continue;
-    const ry = c.mesh.rotation.y, fx = Math.sin(ry), fz = Math.cos(ry);
-    const side = (player.pos.x - c.pos.x) * fz - (player.pos.z - c.pos.z) * fx;
-    if (side <= 0) continue; // the driver's door only
-    bd = d; best = c;
-  }
-  return best ? { car: best, cop: false, name: JACK_NAMES[best.kind] || 'car' } : null;
-}
-
-// GTA-style jacking: the driver is pulled out onto the street (a police
-// driver becomes a foot chaser and the theft is a three-star crime the
-// moment it happens), then the player gets in and drives off through the
-// ordinary enterCar path. A jacked traffic vehicle joins the parked pool
-// once the player leaves it, exactly like a stolen parked car.
-export function carjack(j) {
-  const c = j.car;
-  if (j.cop) {
-    onCopJacked(c);
-    enterCar(c);
-    commitCrime(3, 'Police car jacked', { instant: true });
-    return c;
-  }
-  ejectDriver(c);
-  const i = trafficCars.indexOf(c);
-  if (i >= 0) trafficCars.splice(i, 1);
-  c.angle = c.mesh.rotation.y;
-  c.speed = 0;
-  parkedCars.push(c);
-  enterCar(c);
-  commitCrime(2, 'Carjacking'); // reported only if a police unit is within sight range (police.js)
-  return c;
-}
-
-export function enterCar(car) {
-  car.taken = true;
-  G.driving = car;
-  G.onFoot = false;
-  car.speed = 0;
-  // Clear the car's surface lock: the stateful ground sampler re-seeds
-  // it from the car's heading on its first frame inside a band.
-  car.surfMode = null;
-  if (car.kind === 'moto') { // the lead stays visible, seated on the bike
-    player.mesh.visible = true;
-    if (car.mesh.userData.rider) car.mesh.userData.rider.visible = false;
-  } else player.mesh.visible = false;
-  G.stats.stolen++;
-  G.stats.byClass[car.kind] = (G.stats.byClass[car.kind] || 0) + 1;
-  // Stealing an emergency vehicle is reported by the station at once;
-  // an ordinary parked car only raises the stars if a police unit sees it.
-  commitCrime(car.kind === 'police' || car.kind === 'firetruck' ? 2 : 1, 'Vehicle stolen',
-    car.kind === 'police' || car.kind === 'firetruck' ? { instant: true } : undefined);
-  sfx.enter();
-}
-
-export function exitCar() {
-  const car = G.driving;
-  if (!car) return;
-  car.taken = false;
-  car.speed = 0;
-  if (car.mesh.userData.rider) car.mesh.userData.rider.visible = true;
-  player.pos.set(car.pos.x + 2.6, 0.3, car.pos.z);
-  // The player steps out onto whatever surface the car is on (deck
-  // included) — hand the surface lock over with the position.
-  player.surfMode = car.surfMode; player.surfY = car.surfY;
-  player.mesh.visible = true;
-  G.driving = null;
-  G.onFoot = true;
-  sfx.enter();
-}
-
-let crashCooldown = 0;
-// GAS boost: while Space (or the touch GAS button) is held, accel and
-// top speed scale by this — a boosted car (22 × 1.55 ≈ 34) matches the
-// old pre-retune pace. No fuel, no cooldown.
-export const BOOST_MULT = 1.55;
-// Per-axis analog deadzone, rescaled to 0..1 past it — the same 0.18 the
-// on-foot joystick uses (player.js). Axes are read independently: stick
-// X only steers, stick Y only throttles.
-function joyAxis(v) {
-  const a = Math.abs(v || 0);
-  if (a <= 0.18) return 0;
-  return Math.sign(v) * Math.min(1, (a - 0.18) / 0.82);
-}
-// Touch D-pad steering ramp: a held ◀/▶ eases the steer value toward full
-// lock over ~0.45 s (and eases back to centre on release) instead of
-// snapping to ±1, so the speed-tapered steering above stays controllable
-// with binary buttons. Keyboard/stick steering is unaffected.
-let padSteer = 0;
-export function updateDriving(dt, camera, onCrash) {
-  const car = G.driving;
-  if (!car) return;
-  const H = HANDLING[car.kind] || HANDLING.car;
-  const k = G.keys;
-  const boost = !!(k['Space'] || G.boostTouch);
-  car.boosting = boost;
-  const effAccel = H.accel * (boost ? BOOST_MULT : 1);
-  const effMax = H.max * (boost ? BOOST_MULT : 1);
-  const effReverse = H.reverse * (boost ? BOOST_MULT : 1);
-  // Throttle in [-1, 1]: keyboard is binary (±1); the analog stick is
-  // proportional — a small tilt asks for a small target speed and can
-  // never pass the (unboosted) cap on its own. GAS is the only way past
-  // base. Keyboard wins when both are present.
-  let throttle = 0;
-  if (k['KeyW'] || k['ArrowUp']) throttle = 1;
-  else if (k['KeyS']) throttle = -1;
-  // Touch D-pad pedals: ▲ full throttle, ▼ brake/reverse — the same
-  // proportional target-speed model below (full input = base cap; GAS is
-  // still the only way past base). While moving forward ▼ first brakes
-  // to a stop, then reverses — that falls out of the target-speed model.
-  else if (G.driveTouch && G.driveTouch.up) throttle = 1;
-  else if (G.driveTouch && G.driveTouch.down) throttle = -1;
-  else throttle = -joyAxis(G.joyVec ? G.joyVec.y : 0);
-  if (car.burning || car.burnt) car.speed *= Math.max(0, 1 - 3 * dt);
-  else if (throttle !== 0) {
-    // Accelerate toward the throttle's target speed without overshoot:
-    // full input reproduces the old accel ramp to the cap, partial stick
-    // settles at throttle × cap, and releasing GAS eases a boosted car
-    // back down to base instead of snapping.
-    const target = throttle > 0 ? throttle * effMax : throttle * effReverse;
-    const rate = effAccel * (throttle > 0 ? 1 : 0.9) * dt;
-    car.speed += Math.max(-rate, Math.min(rate, target - car.speed));
-  }
-  else { car.speed *= Math.max(0, 1 - 0.7 * dt); if (Math.abs(car.speed) < 0.05) car.speed = 0; }
-  // Steering in [-1, 1]: keyboard binary, stick X proportional (stick
-  // right = KeyD = steer −1 in this convention).
-  let steer = (k['KeyA'] ? 1 : 0) - (k['KeyD'] ? 1 : 0);
-  if (steer === 0 && G.driveTouch && (G.driveTouch.left || G.driveTouch.right)) {
-    // D-pad steering (◀ = KeyA = steer +1 in this convention), ramped.
-    const target = (G.driveTouch.left ? 1 : 0) - (G.driveTouch.right ? 1 : 0);
-    const step = dt / 0.45;
-    padSteer += Math.max(-step, Math.min(step, target - padSteer));
-    steer = padSteer;
-  } else {
-    if (steer === 0) steer = -joyAxis(G.joyVec ? G.joyVec.x : 0);
-    // Keep the ramp centred whenever the pad is not the active source.
-    const step = dt / 0.45;
-    padSteer += Math.max(-step, Math.min(step, 0 - padSteer));
-    if (steer === 0) steer = padSteer; // release glide: ease back to centre
-  }
-  if (car.speed !== 0) {
-    // Speed-aware yaw: the old min(1, |speed|/10) factor gave the FULL
-    // turn rate at any speed ≥ 10, which at the old 34 u/s was twitchy.
-    // Now the rate still ramps in gently at crawl (precise parking), but
-    // TAPERS above ~6 u/s, so at base top speed a held turn describes a
-    // wide, stable arc instead of spinning the car around.
-    const sp = Math.abs(car.speed);
-    const taper = 1 / (1 + Math.max(0, sp - 6) / 10);
-    car.angle += steer * dt * H.turn * Math.sign(car.speed) * Math.min(1, sp / 10) * taper;
-  }
-  const fx = Math.sin(car.angle), fz = Math.cos(car.angle);
-  G.stats.drivenKm += Math.abs(car.speed) * dt / 1000;
-  const radius = car.kind === 'truck' || car.kind === 'firetruck' ? 2.2 : 1.6;
-  // Sub-step the move (hops of at most ~0.8 units, collision after each) so a
-  // long frame at full speed can never jump a building or prop shell.
-  const hops = Math.max(1, Math.ceil((Math.abs(car.speed) * dt) / 0.8));
-  const hdt = dt / hops;
-  let buildingHit = false, propHit = false;
-  for (let h = 0; h < hops; h++) {
-    car.pos.x += fx * car.speed * hdt;
-    car.pos.z += fz * car.speed * hdt;
-    const impact = collideBuildings(car.pos, radius);
-    buildingHit = buildingHit || impact.building;
-    propHit = propHit || impact.prop;
-  }
-  crashCooldown -= dt;
-  if ((buildingHit || propHit) && Math.abs(car.speed) > 6 && crashCooldown <= 0) {
-    crashCooldown = 0.8;
-    car.health -= propHit ? 10 * H.dmg : 8 * H.dmg;
-    // Heavy classes plough on slowly; light ones glance off backwards.
-    car.speed *= car.kind === 'truck' || car.kind === 'firetruck' ? 0.4 : -0.25;
-    onCrash && onCrash(propHit ? 'prop' : 'building');
-  } else if (propHit && crashCooldown <= 0) {
-    crashCooldown = 0.8;
-    car.speed = 0; // a slow roll into a tree still stops the car
-  }
-  // Stateful surface (city.js groundHeightFor): the heading hint only
-  // seeds the first sample inside a band; after that the car keeps the
-  // surface it is on, so turning at the flyover crossing can no longer
-  // snap it between deck and street mid-turn.
-  car.pos.y = groundHeightFor(car, car.pos.x, car.pos.z, Math.abs(Math.cos(car.angle)) >= Math.abs(Math.sin(car.angle)) ? 'z' : 'x');
-  car.mesh.position.copy(car.pos);
-  car.mesh.rotation.y = car.angle;
-  for (const w of car.mesh.userData.wheels) w.rotation.x += car.speed * dt * 2.2;
-  player.pos.copy(car.pos);
-  if (car.kind === 'moto') {
-    player.mesh.position.set(car.pos.x, 0.55, car.pos.z);
-    player.mesh.rotation.y = car.angle;
-  }
-  // Chase camera: behind the car, using the same yaw convention and the
-  // same composition as on foot. The drag hold ticks here too (updatePlayer
-  // never runs while driving, so still exactly one decay per frame); while
-  // a drag hold is active the yaw belongs to orbitCamera() — the player can
-  // orbit manually while driving — and otherwise the yaw EASES behind the
-  // car at the foot-follow rate instead of snapping to it every frame.
-  tickDragHold(dt);
-  if (!dragHoldActive()) {
-    const want = Math.PI - car.angle;
-    G.camYaw += wrapAngle(want - G.camYaw) * Math.min(1, dt * 3.0);
-  }
-  updateCamera(dt, camera, car.pos, car.kind === 'moto' ? 8 : 11);
-  if (car.health <= 0) { car.health = 0; car.speed = 0; }
-}
-
-export function vehicleHitCheck(onCrash) {
-  const car = G.driving;
-  if (!car || Math.abs(car.speed) < 3) return;
-  if (crashCooldown > 0) return;
-  const H = HANDLING[car.kind] || HANDLING.car;
-  const others = [];
-  for (const p of parkedCars) if (!p.taken && p !== car) others.push(p);
-  for (const t of trafficCars) others.push({ pos: t.mesh.position, mesh: t.mesh, traffic: t, healthRef: t });
-  for (const o of others) {
-    const dx = car.pos.x - o.pos.x, dz = car.pos.z - o.pos.z;
-    if (dx * dx + dz * dz < 9.5) {
-      crashCooldown = 0.7;
-      car.health -= 6 / H.dmg;
-      car.speed *= car.kind === 'truck' || car.kind === 'firetruck' ? 0.65 : 0.3;
-      if (o.traffic) { o.traffic.stopped = 1.5; o.traffic.health -= 10 * H.dmg; }
-      else if (o.health !== undefined) o.health -= 8 * H.dmg;
-      onCrash && onCrash('vehicle');
-      return;
+// Taking a car is always reported; the label and star count depend
+// on whether someone was driving it and on what kind of vehicle it
+// is, and those reporting rules are applied here at the call site.
+export function enterVehicle(v, playerPos) {
+  if (!v || v.wrecked) return false;
+  if (v.driver === 'traffic') {
+    commitCrime(2, 'Carjacking', { pos: playerPos });
+  } else if (v.driver === null) {
+    if (v.type === 'firetruck' || v.type === 'police') {
+      commitCrime(3, 'Vehicle stolen', { pos: playerPos });
+    } else {
+      commitCrime(2, 'Vehicle stolen', { pos: playerPos });
     }
   }
+  v.driver = 'player';
+  v.speed = 0;
+  G.driving = v;
+  G.stats.carsStolen += 1;
+  sfx.door();
+  return true;
+}
+
+// Leave the player standing beside the car's left side, clear of
+// the bodywork, so exiting never drops them inside another mesh.
+export function exitVehicle() {
+  const v = G.driving;
+  if (!v) return null;
+  const fwd = forwardOf(v.angle);
+  // Left of the facing direction, offset enough to clear the door.
+  const left = { x: fwd.z, z: -fwd.x };
+  const exitPos = {
+    x: v.pos.x + left.x * 2.2,
+    z: v.pos.z + left.z * 2.2,
+  };
+  v.driver = null;
+  v.speed = 0;
+  G.driving = null;
+  sfx.door();
+  return exitPos;
+}
+
+// Shared damage path for impacts and any other harm. Wrecking is a
+// one-way transition, reported once by returning true on that call.
+export function damageVehicle(v, amount) {
+  if (!v || v.wrecked || amount <= 0) return false;
+  v.health -= amount;
+  if (v.health > 0) return false;
+  v.health = 0;
+  v.wrecked = true;
+  v.speed = 0;
+  // Darken the bodywork so a wreck reads as burnt-out at a glance;
+  // traverse defensively because mesh internals belong to city.js.
+  v.mesh.traverse((child) => {
+    if (child.isMesh && child.material && child.material.color) {
+      child.material = child.material.clone();
+      child.material.color.multiplyScalar(0.3);
+    }
+  });
+  return true;
+}
+
+// Steer a traffic vehicle toward a target point at a cruise speed.
+// Mirrors the player path's speed-tapered steering so ambient cars
+// corner with the same feel as the one the player is driving.
+export function steerVehicleForTraffic(v, dt, tx, tz, cruise) {
+  const dx = tx - v.pos.x;
+  const dz = tz - v.pos.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+  if (v.wrecked || dt <= 0) return dist;
+
+  // Accelerate toward cruise; a cruise of zero is a full stop.
+  const accel = v.def.accel * 0.7;
+  v.speed = approach(v.speed, cruise, accel * dt);
+
+  // Turn toward the target, capped by the same taper as the player
+  // path so fast cars cannot pivot on the spot.
+  if (Math.abs(v.speed) > 0.05 && dist > 0.01) {
+    const desired = Math.atan2(dx, dz);
+    const diff = wrapAngle(desired - v.angle);
+    const yawRate = v.def.turnRate / (1 + Math.abs(v.speed) * 0.055);
+    const maxTurn = yawRate * dt;
+    v.angle += clamp(diff, -maxTurn, maxTurn);
+  }
+
+  const fwd = forwardOf(v.angle);
+  const intendedX = v.pos.x + fwd.x * v.speed * dt;
+  const intendedZ = v.pos.z + fwd.z * v.speed * dt;
+  v.pos.x = intendedX;
+  v.pos.z = intendedZ;
+
+  // A solid hit kills traffic momentum outright; sliding along a
+  // wall would look like the AI is grinding its way through town.
+  const hit = collideWorld(v.pos, 1.5);
+  const shifted =
+    Math.abs(v.pos.x - intendedX) > 0.05 || Math.abs(v.pos.z - intendedZ) > 0.05;
+  if ((hit === true || shifted) && Math.abs(v.speed) > 3) {
+    v.speed = 0;
+  }
+
+  groundMesh(v, dt);
+  spinWheels(v, dt);
+  v.mesh.rotation.y = v.angle;
+
+  const ndx = tx - v.pos.x;
+  const ndz = tz - v.pos.z;
+  return Math.sqrt(ndx * ndx + ndz * ndz);
+}
+
+// Player driving, one frame. Input is already normalised by the
+// caller: throttle and steer in -1..1, boost as a held flag.
+export function updateDriving(dt, input) {
+  const v = G.driving;
+  if (!v || dt <= 0) return;
+  if (v.wrecked) {
+    v.speed = 0;
+    return;
+  }
+  const def = v.def;
+  const throttle = clamp(input.throttle || 0, -1, 1);
+  const steer = clamp(input.steer || 0, -1, 1);
+  const boosting = Boolean(input.boost) && throttle > 0;
+
+  // Boost stretches both how hard the car pulls and where it tops
+  // out; reverse is never boosted, it stays a careful manoeuvre.
+  const boostMult = boosting ? TUNING.boostMultiplier : 1;
+  let target = 0;
+  if (throttle >= 0) {
+    target = throttle * def.topSpeed * boostMult;
+  } else {
+    target = throttle * def.reverseSpeed;
+  }
+  const accelRate = def.accel * boostMult;
+  v.speed = approach(v.speed, target, accelRate * dt);
+
+  // Steering authority fades with speed, and reversing flips the
+  // yaw sign so backing up steers the way a real car does.
+  if (Math.abs(v.speed) > 0.05) {
+    const yawRate = steer * def.turnRate / (1 + Math.abs(v.speed) * 0.055);
+    v.angle += yawRate * dt * Math.sign(v.speed);
+  }
+
+  const fwd = forwardOf(v.angle);
+  const intendedX = v.pos.x + fwd.x * v.speed * dt;
+  const intendedZ = v.pos.z + fwd.z * v.speed * dt;
+  v.pos.x = intendedX;
+  v.pos.z = intendedZ;
+
+  // Impact cost scales with the vehicle's own damage factor, then
+  // the car rebounds instead of sticking to whatever it hit.
+  const hit = collideWorld(v.pos, 1.5);
+  const shifted =
+    Math.abs(v.pos.x - intendedX) > 0.05 || Math.abs(v.pos.z - intendedZ) > 0.05;
+  if (hit === true || shifted) {
+    const impact = Math.abs(v.speed);
+    if (impact > 0.5) {
+      damageVehicle(v, impact * def.damage * 0.8);
+      if (impact > 6) sfx.hit();
+      v.speed = -0.25 * v.speed;
+    }
+  }
+
+  groundMesh(v, dt);
+  spinWheels(v, dt);
+  v.mesh.rotation.y = v.angle;
+
+  // Odometer for the run stats, in kilometres.
+  G.stats.distanceKm += Math.abs(v.speed) * dt / 1000;
+
+  // Keep the record's cached angle honest for other systems.
+  v.angle = wrapAngle(v.angle);
+}
+
+// A jacked police car is built by police.js, but it must join the
+// shared vehicle registry so the driving physics and traffic logic
+// can see it. Fill in any defaults its builder left out, then adopt
+// the record as-is so its mesh and identity stay the same object.
+export function adoptVehicle(obj) {
+  if (!obj) return obj;
+  obj.def = obj.def || VEHICLE_TYPES[obj.type] || VEHICLE_TYPES.car;
+  if (obj.driver === undefined) obj.driver = null;
+  if (obj.speed === undefined) obj.speed = 0;
+  if (obj.health === undefined) obj.health = 100;
+  if (obj.wrecked === undefined) obj.wrecked = false;
+  if (obj.exploded === undefined) obj.exploded = false;
+  if (!vehicles.includes(obj)) vehicles.push(obj);
+  return obj;
 }

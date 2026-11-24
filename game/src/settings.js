@@ -1,45 +1,59 @@
-// Player settings, persisted in localStorage and applied immediately.
-//
-// Covered here: sound volume and mute, the FPS cap (30 or 60), the graphics
-// tier ('standard' or 'hd'), screen brightness, the minimap zoom level, and
-// the on-screen joystick toggle. Touch devices additionally auto-enable the touch UI in touch.js;
-// this stored flag remains the manual override the Settings screen exposes.
-export const SETTINGS_KEY = 'palm-cove-settings-v1';
+// Visual settings: applied defensively because the DOM and renderer
+// may not both exist yet when a settings change lands.
+import { G } from './state.js';
 
-export const settings = {
-  volume: 0.8,
-  muted: false,
-  fpsCap: 60,
-  quality: 'standard',
-  brightness: 1,
-  joystick: false,
-  radioStation: 0, // index into the radio stations in audio.js (0 = Neon FM)
-  radioOn: true,
-  mapZoom: 1, // minimap zoom level index into hud.js MAP_ZOOM_LEVELS (0 near, 1 mid, 2 far)
-};
+function settings() {
+  return G.settings && typeof G.settings === 'object' ? G.settings : {};
+}
 
-export function loadSettings() {
+export function applyVisualSettings(container, renderer) {
+  const s = settings();
+
+  if (container && container.style) {
+    const b = Number.isFinite(s.brightness) ? s.brightness : 1;
+    // CSS filter is the cheapest whole-frame brightness control available.
+    container.style.filter = `brightness(${b})`;
+  }
+
+  if (renderer) {
+    try {
+      if (s.quality === 'high') {
+        const dpr = globalThis.devicePixelRatio || 1;
+        if (typeof renderer.setPixelRatio === 'function') {
+          renderer.setPixelRatio(Math.min(dpr, 2));
+        }
+        if (renderer.shadowMap) renderer.shadowMap.enabled = true;
+      } else if (s.quality === 'low') {
+        // Pixel ratio 1 is the single biggest mobile frame-rate win.
+        if (typeof renderer.setPixelRatio === 'function') {
+          renderer.setPixelRatio(1);
+        }
+        if (renderer.shadowMap) renderer.shadowMap.enabled = false;
+      }
+    } catch (err) {
+      // A renderer mid-teardown must not take the settings menu down too.
+    }
+  }
+
   try {
-    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
-    if (stored) Object.assign(settings, stored);
-  } catch (e) { /* keep defaults when storage is unreadable */ }
-  return settings;
+    let joy = null;
+    if (container && typeof container.querySelector === 'function') {
+      joy = container.querySelector('#joy');
+    }
+    if (!joy && globalThis.document) {
+      joy = globalThis.document.getElementById('joy');
+    }
+    if (joy && joy.style) {
+      const scale = Number.isFinite(s.joystick) ? s.joystick : 1;
+      joy.style.transform = `scale(${scale})`;
+    }
+  } catch (err) {
+    // Missing touch UI on desktop is normal, not an error.
+  }
 }
 
-export function saveSettings() {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* best effort */ }
-}
-
-// The renderer registers a hook so quality-tier changes (pixel ratio, shadow
-// and draw tweaks) apply without settings.js importing the whole scene.
-let graphicsHook = null;
-export function onGraphics(fn) { graphicsHook = fn; }
-
-export function applySettings() {
-  // Brightness is a CSS filter over the WebGL canvas wrapper: cheap, and it
-  // affects the 3D view and DOM HUD in one move.
-  const app = document.getElementById('app');
-  if (app) app.style.filter = 'brightness(' + settings.brightness.toFixed(2) + ')';
-  if (graphicsHook) graphicsHook(settings);
-  saveSettings();
+export function frameInterval() {
+  const s = settings();
+  // 0 means uncapped; 30fps returns the exact budget the loop sleeps on.
+  return s.fps === 30 ? 1000 / 30 : 0;
 }

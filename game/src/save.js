@@ -1,68 +1,81 @@
-// localStorage autosave — a single slot.
-//
-// What persists: cash and story progress, the weapon loadout (owned list,
-// current weapon, sniper ammo), the chosen lead, the found-items inventory
-// with its selected slot and armour value, lifetime statistics, the
-// story-tracking record that decides endings, and which endings have been
-// unlocked. Everything is best-effort: private-mode or quota failures are
-// swallowed and the game simply runs unsaved.
-import { SAVE_KEY } from './config.js';
+// Persistence: one JSON blob in localStorage, guarded because storage
+// can be blocked, full, or cleared without the game's consent.
 import { G } from './state.js';
+import { SAVE_KEY } from './config.js';
+import { invSnapshot, invRestore } from './inventory.js';
 
-export function saveGame() {
+export function saveGame(playerPos) {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
+    const data = {
       money: G.money,
-      missionIndex: G.missionIndex,
-      storyDone: G.storyDone,
-      weapon: G.weapon,
-      weapons: G.weapons,
-      sniperAmmo: G.sniperAmmo,
-      character: G.character,
-      inventory: G.inventory,
-      selectedSlot: G.selectedSlot,
-      armour: G.armour,
+      health: G.health,
+      lead: G.lead,
+      partner: G.partner,
       stats: G.stats,
-      track: G.track,
-      endingsUnlocked: G.endingsUnlocked,
-      lastEnding: G.lastEnding,
-      savedAt: Date.now(),
-    }));
+      endingsFound: G.endingsFound,
+      settings: G.settings,
+      minimapZoom: G.minimapZoom,
+      radioStation: G.radioStation,
+      inventory: invSnapshot(),
+      player: {
+        x: playerPos && Number.isFinite(playerPos.x) ? playerPos.x : 0,
+        z: playerPos && Number.isFinite(playerPos.z) ? playerPos.z : 0,
+      },
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
     return true;
-  } catch (e) {
+  } catch (err) {
     return false;
   }
 }
 
-export function loadSave() {
+export function loadGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    return data;
+  } catch (err) {
+    // A corrupt save is treated as no save, never as a crash.
     return null;
   }
 }
 
-// Merge a parsed save back into G, tolerating saves written by older builds
-// that lack the newer fields — every field falls back to the live default.
-export function applySave(s) {
-  if (!s) return;
-  G.money = s.money ?? G.money;
-  G.missionIndex = s.missionIndex ?? 0;
-  G.storyDone = !!s.storyDone;
-  G.weapon = s.weapon || 'Fists';
-  if (Array.isArray(s.weapons) && s.weapons.length) G.weapons = s.weapons;
-  G.sniperAmmo = s.sniperAmmo ?? G.sniperAmmo;
-  if (s.character) G.character = s.character;
-  if (Array.isArray(s.inventory)) G.inventory = s.inventory;
-  G.selectedSlot = s.selectedSlot ?? 0;
-  G.armour = s.armour ?? 0;
-  if (s.stats) G.stats = Object.assign(G.stats, s.stats);
-  if (s.track) G.track = Object.assign(G.track, s.track);
-  if (Array.isArray(s.endingsUnlocked)) G.endingsUnlocked = s.endingsUnlocked;
-  G.lastEnding = s.lastEnding || '';
+function pick(value, fallback) {
+  return value === undefined || value === null ? fallback : value;
 }
 
-export function clearSave() {
-  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage unavailable */ }
+export function applySave(data) {
+  if (!data || typeof data !== 'object') return false;
+  G.money = Number.isFinite(data.money) ? data.money : G.money;
+  G.health = Number.isFinite(data.health) ? data.health : G.health;
+  G.lead = pick(data.lead, G.lead);
+  G.partner = pick(data.partner, G.partner);
+  if (data.stats && typeof data.stats === 'object') {
+    // Merge over current stats so newer fields survive older saves.
+    G.stats = Object.assign({}, G.stats, data.stats);
+    if (!Array.isArray(G.stats.choices)) G.stats.choices = [];
+  }
+  if (Array.isArray(data.endingsFound)) {
+    G.endingsFound = data.endingsFound.slice();
+  }
+  if (data.settings && typeof data.settings === 'object') {
+    G.settings = Object.assign({}, G.settings, data.settings);
+  }
+  G.minimapZoom = pick(data.minimapZoom, G.minimapZoom);
+  G.radioStation = Number.isFinite(data.radioStation)
+    ? data.radioStation
+    : G.radioStation;
+  if (data.inventory) invRestore(data.inventory);
+  return true;
+}
+
+export function wipeSave() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+    return true;
+  } catch (err) {
+    return false;
+  }
 }

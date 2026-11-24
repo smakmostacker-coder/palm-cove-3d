@@ -1,232 +1,398 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Palm Cove — a low-poly open-world crime game</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌴</text></svg>">
 <style>
-  html, body { margin:0; height:100%; overflow:hidden; background:#191238; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:#fff; touch-action:none; }
-  #app { position:fixed; inset:0; }
-  canvas.webgl { display:block; }
-  .panel { background:rgba(10,10,18,.66); border:2px solid rgba(255,255,255,.22); border-radius:10px; }
-  #hud { position:fixed; inset:0; pointer-events:none; display:none; }
-  #topbar { position:absolute; top:12px; left:12px; padding:8px 14px; min-width:200px; }
-  #healthWrap { width:190px; height:12px; background:#1c1c26; border:1px solid rgba(255,255,255,.4); overflow:hidden; margin:5px 0; }
-  #healthFill { height:100%; width:100%; background:#2ed573; }
-  #armourWrap { width:190px; height:8px; background:#1c1c26; border:1px solid rgba(255,255,255,.3); overflow:hidden; margin:3px 0; display:none; }
-  #armourFill { height:100%; width:0%; background:#54a0ff; }
-  #money { font-size:26px; font-weight:900; font-style:italic; color:#7bed9f; text-shadow:2px 2px 0 #10331a; letter-spacing:1px; }
-  #stars { position:absolute; top:10px; right:16px; font-size:30px; letter-spacing:3px; min-height:36px; color:#ffd32a; text-shadow:2px 2px 0 #000; }
-  #weapon { font-size:14px; font-weight:800; font-style:italic; text-transform:uppercase; opacity:.95; }
-  #objectiveBox { position:absolute; top:12px; left:50%; transform:translateX(-50%); max-width:520px; padding:8px 16px; text-align:center; font-weight:700; font-size:15px; }
-  #district { position:absolute; top:52px; right:14px; padding:4px 10px; font-size:24px; font-weight:900; font-style:italic; text-transform:uppercase; text-shadow:2px 2px 0 #000; color:#ffd9ec; }
-  #minimap { position:absolute; right:12px; top:92px; width:118px; height:150px; border:2px solid rgba(255,255,255,.55); border-radius:10px; cursor:pointer; pointer-events:auto; }
-  #zoomBtn { position:absolute; right:12px; top:248px; pointer-events:auto; font-size:15px; font-weight:900; padding:14px 18px; margin:0; min-width:118px; min-height:52px; z-index:9; touch-action:manipulation; }
-  #btnQuestHud { position:absolute; right:12px; top:310px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
-  #hotbar { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; pointer-events:auto; }
-  .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.35); border-radius:8px; background:rgba(10,10,18,.66); position:relative; text-align:center; cursor:pointer; }
-  .slot.sel { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.55); }
-  .slotKey { position:absolute; top:1px; left:5px; font-size:11px; font-weight:800; opacity:.75; }
-  .slotIcon { font-size:24px; line-height:52px; }
-  .slotCount { position:absolute; bottom:1px; right:5px; font-size:12px; font-weight:800; color:#ffd32a; }
-  #prompt { position:absolute; bottom:220px; left:50%; transform:translateX(-50%); padding:8px 18px; font-weight:700; display:none; }
-  #tutBox { position:fixed; bottom:150px; left:50%; transform:translateX(-50%); display:none; align-items:center; gap:14px; padding:10px 16px; z-index:6; max-width:min(680px,92vw); }
-  #tutText { font-size:16px; font-weight:800; color:#ffe9a8; text-shadow:0 1px 3px #000; }
-  #btnTutSkip { font-size:13px; padding:7px 14px; margin:0; background:#dfe6e9; }
-  #dialogue { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); width:min(640px,90vw); padding:12px 18px; display:none; }
-  #dialogueWho { color:#ffd32a; font-weight:800; margin-bottom:4px; }
-  #bustWrap { position:absolute; bottom:250px; left:50%; transform:translateX(-50%); width:220px; padding:6px 10px; display:none; text-align:center; font-weight:800; }
-  #bustBar { height:10px; background:#222; border-radius:5px; overflow:hidden; margin-top:4px; }
-  #bustFill { height:100%; width:0%; background:#ff4757; }
-  #banner { position:absolute; top:34%; left:50%; transform:translate(-50%,-50%); font-size:64px; font-weight:900; font-style:italic; letter-spacing:4px; color:#ff4757; text-shadow:0 4px 0 #000; display:none; }
-  #scope { position:fixed; inset:0; pointer-events:none; display:none; z-index:5;
-    background:radial-gradient(circle at center, transparent 150px, rgba(0,0,0,.92) 155px); }
-  #scope::before, #scope::after { content:''; position:absolute; background:rgba(0,0,0,.85); }
-  #scope::before { left:50%; top:0; width:2px; height:100%; transform:translateX(-50%); }
-  #scope::after { top:50%; left:0; height:2px; width:100%; transform:translateY(-50%); }
-  .overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; z-index:10; }
-  #menu { background:linear-gradient(180deg, rgba(255,110,64,.30), rgba(25,18,56,.62)); }
-  #menu h1 { font-size:88px; margin:0; letter-spacing:3px; font-style:italic; color:#ffd32a; text-shadow:0 5px 0 #e84393, 0 10px 24px #000; }
-  #menu p.sub { font-size:19px; max-width:580px; text-shadow:0 2px 6px #000; }
-  button { pointer-events:auto; cursor:pointer; font-size:19px; font-weight:800; padding:12px 34px; margin:6px; border:0; border-radius:10px; background:#ffd32a; color:#1e272e; }
-  button:hover { background:#ffea70; }
-  button.secondary { background:#dfe6e9; }
-  #saveInfo { font-size:14px; opacity:.92; text-shadow:0 1px 4px #000; }
-  #pauseMenu, #statsMenu, #settingsMenu, #shopMenu, #endingMenu, #mapMenu, #questMenu, #controlsMenu, #choiceMenu { background:rgba(5,6,14,.78); display:none; }
-  #endingMenu { background:linear-gradient(180deg, rgba(201,79,124,.35), rgba(5,6,14,.88)); }
-  #endingName { font-size:56px; font-style:italic; color:#ffd32a; text-shadow:0 4px 0 #e84393, 0 8px 20px #000; margin:0; }
-  #endingText { font-size:18px; max-width:640px; line-height:1.55; }
-  .statgrid { font-size:17px; line-height:1.65; padding:18px 28px; text-align:left; }
-  .controls { font-size:14px; opacity:.92; line-height:1.6; text-shadow:0 1px 4px #000; max-width:640px; }
-  .ctrlgrid { font-size:15px; line-height:1.5; padding:16px 24px; text-align:left; max-height:62vh; overflow:auto; }
-  .ctrlgrid td { padding:2px 14px 2px 0; }
-  .ctrlgrid td:first-child { font-weight:800; color:#ffd32a; white-space:nowrap; }
-  .setrow { display:flex; align-items:center; gap:14px; font-size:17px; font-weight:700; margin:9px 0; min-width:420px; justify-content:space-between; }
-  .setrow input[type=range] { width:190px; }
-  .setrow select { font-size:16px; padding:5px 10px; border-radius:6px; }
-  #shopBody { display:flex; flex-direction:column; }
-  #questBody { max-height:64vh; overflow:auto; width:min(680px,92vw); text-align:left; padding:6px 10px; }
-  .qhead { font-size:20px; color:#ffd32a; margin:14px 0 6px; font-style:italic; }
-  .qrow { border:2px solid rgba(255,255,255,.25); border-radius:8px; padding:9px 13px; margin:6px 0; cursor:pointer; background:rgba(10,10,18,.55); }
-  .qrow:hover { border-color:#ffd32a; }
-  .qrow.tracked { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.5); }
-  .qtitle { font-size:17px; font-weight:800; }
-  .qtrack { color:#ffd32a; font-size:12px; letter-spacing:1px; }
-  .qcount { color:#7bed9f; font-size:13px; }
-  .qdesc { font-size:14px; opacity:.92; }
-  .qmeta { font-size:13px; opacity:.8; }
-  #joy { position:fixed; left:26px; bottom:86px; width:120px; height:120px; border-radius:50%; background:rgba(255,255,255,.14); border:2px solid rgba(255,255,255,.4); display:none; z-index:8; touch-action:none; }
-  #joyKnob { position:absolute; left:50%; top:50%; width:52px; height:52px; border-radius:50%; background:rgba(255,255,255,.45); transform:translate(-50%,-50%); }
-  #joyBtns { position:fixed; right:26px; bottom:220px; display:none; flex-direction:column; gap:10px; z-index:8; }
-  #joyBtns button { width:58px; height:58px; border-radius:50%; padding:0; font-size:15px; }
-  /* Driving D-pad (touch only, shown instead of the joystick while driving):
-     single plus/D-pad cluster bottom-right — all four drive buttons in one
-     place (▲ top, ◀ ▶ middle, ▼ bottom, empty centre), so one thumb can
-     hold steer + throttle together. GAS stays in #joyBtns, above the cluster. */
-  #dpad { position:fixed; inset:auto 0 0 0; display:none; z-index:8; pointer-events:none; }
-  #dpadCluster { position:absolute; right:18px; bottom:96px; width:244px; height:244px; pointer-events:none; }
-  #padUp { position:absolute; left:84px; top:0; }
-  #padLeft { position:absolute; left:0; top:84px; }
-  #padRight { position:absolute; left:168px; top:84px; }
-  #padDown { position:absolute; left:84px; top:168px; }
-  #dpad button { pointer-events:auto; width:76px; height:76px; border-radius:50%; padding:0; margin:0; font-size:30px; background:rgba(255,211,42,.88); color:#1e272e; border:2px solid rgba(255,255,255,.6); touch-action:none; user-select:none; -webkit-user-select:none; }
-  #dpad button.held { background:#fff; transform:scale(1.08); }
-  #fullmap { touch-action:none; }
-  #mapBtns { display:flex; gap:8px; align-items:center; margin-top:8px; }
-  #mapBtns button { font-size:16px; padding:10px 18px; margin:0; min-width:52px; min-height:48px; }
+  * {
+    box-sizing: border-box; margin: 0; padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden; background: #0c071c;
+    color: #fff7ea; font-family: "Trebuchet MS", "Segoe UI", Verdana, sans-serif;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  #app { position: fixed; inset: 0; overflow: hidden; background: #0c071c; }
+  #app canvas { display: block; }
+  #app > canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .screen {
+    position: absolute; inset: 0; z-index: 40; overflow-y: auto;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; padding: 24px 20px;
+    background: rgba(12, 7, 28, 0.84); text-align: center;
+  }
+  .screen h1 { letter-spacing: 0.18em; font-size: 30px; color: #fff7ea; }
+  .screen h2 { letter-spacing: 0.14em; font-size: 22px; color: #fff7ea; }
+  .screen p { max-width: 520px; line-height: 1.45; color: #e8ddf5; font-size: 15px; }
+  .menu-title {
+    font-size: clamp(52px, 13vw, 108px); font-weight: 900; line-height: 0.95;
+    letter-spacing: 0.12em; color: transparent;
+    background: linear-gradient(180deg, #ffe66d 0%, #ffb52e 34%, #ff5f9e 72%, #b04dff 100%);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 4px 0 rgba(23, 16, 46, 0.85));
+  }
+  .menu-subtitle {
+    font-size: 16px; letter-spacing: 0.06em; color: #ffd9ec;
+    max-width: 540px; line-height: 1.5;
+  }
+  .menu-footer {
+    margin-top: 10px; font-size: 12px; letter-spacing: 0.08em;
+    color: rgba(255, 247, 234, 0.62);
+  }
+  .btn {
+    pointer-events: auto; appearance: none; border: none; cursor: pointer;
+    padding: 14px 28px; min-width: 230px; border-radius: 12px;
+    background: #ffb52e; color: #241203; font-family: inherit;
+    font-size: 17px; font-weight: 800; letter-spacing: 0.1em;
+    box-shadow: 0 4px 0 #a96f00, 0 8px 18px rgba(0, 0, 0, 0.45);
+  }
+  .btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 2px 0 #a96f00, 0 4px 10px rgba(0, 0, 0, 0.45);
+  }
+  .btn-ghost {
+    background: transparent; color: #fff7ea; box-shadow: none;
+    border: 2px solid rgba(255, 247, 234, 0.55);
+  }
+  .btn:disabled { opacity: 0.38; cursor: default; transform: none; }
+  #hud { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+  .hud-topleft {
+    position: absolute; top: 14px; left: 14px; min-width: 168px;
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  #moneyEl {
+    font-size: 22px; font-weight: 900; letter-spacing: 0.04em; color: #ffe66d;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9), 0 0 12px rgba(0, 0, 0, 0.6);
+  }
+  .health-shell {
+    width: 168px; height: 14px; border-radius: 8px; overflow: hidden;
+    background: rgba(12, 7, 28, 0.78); border: 1px solid rgba(255, 247, 234, 0.45);
+  }
+  #healthFill {
+    height: 100%; width: 100%; border-radius: 8px; transition: width 0.18s ease;
+    background: linear-gradient(90deg, #37d67a 0%, #9be15d 55%, #ffb52e 100%);
+  }
+  #starsEl {
+    position: absolute; top: 12px; right: 176px; font-size: 24px;
+    letter-spacing: 0.18em; color: #ffd23e; text-shadow: 0 2px 5px rgba(0, 0, 0, 0.9);
+  }
+  #starsEl.blink { opacity: 0.25; }
+  #objectiveEl {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    max-width: 46vw; padding: 7px 16px; border-radius: 999px; text-align: center;
+    background: rgba(23, 16, 46, 0.78); border: 1px solid rgba(255, 181, 46, 0.5);
+    font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #bannerEl {
+    position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%);
+    font-size: clamp(30px, 7vw, 58px); font-weight: 900; text-align: center;
+    letter-spacing: 0.12em; color: #fff7ea; pointer-events: none;
+    text-shadow: 0 3px 0 #ff5f9e, 0 6px 18px rgba(0, 0, 0, 0.9);
+  }
+  #dialogEl {
+    position: absolute; left: 50%; bottom: 168px; transform: translateX(-50%);
+    width: min(620px, 92vw); padding: 14px 18px; border-radius: 14px;
+    background: #17102e; border: 2px solid rgba(255, 95, 158, 0.65);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6); pointer-events: auto;
+  }
+  #dialogName { color: #ff5f9e; font-weight: 900; letter-spacing: 0.1em; font-size: 14px; margin-bottom: 6px; }
+  #dialogText { font-size: 16px; line-height: 1.45; color: #fff7ea; }
+  #choiceRow { display: flex; gap: 10px; margin-top: 12px; }
+  #choiceRow .btn { flex: 1; min-width: 0; padding: 10px 12px; font-size: 14px; }
+  #promptEl {
+    position: absolute; left: 50%; bottom: 148px; transform: translateX(-50%);
+    padding: 8px 18px; border-radius: 999px; white-space: nowrap;
+    background: rgba(23, 16, 46, 0.85); border: 1px solid rgba(255, 247, 234, 0.4);
+    font-size: 14px; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .minimap-wrap {
+    position: absolute; top: 12px; right: 12px;
+    display: flex; flex-direction: column; gap: 7px; align-items: stretch;
+  }
+  #minimap {
+    width: 148px; height: 148px; border-radius: 12px; background: #10233f;
+    border: 2px solid rgba(255, 247, 234, 0.65); pointer-events: auto;
+  }
+  .minimap-btns { display: flex; flex-direction: column; gap: 6px; }
+  .minimap-btns .btn { pointer-events: auto; min-width: 0; padding: 7px 10px; font-size: 12px; border-radius: 9px; }
+  #radioEl {
+    position: absolute; left: 14px; bottom: 148px; padding: 6px 12px;
+    border-radius: 999px; background: rgba(23, 16, 46, 0.82);
+    border: 1px solid rgba(255, 95, 158, 0.55); color: #ffd9ec;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+  }
+  #prisonEl {
+    position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+    padding: 7px 16px; border-radius: 999px; color: #ffe3e6;
+    background: rgba(120, 12, 32, 0.85); border: 1px solid #ff5f6e;
+    font-size: 13px; font-weight: 800; letter-spacing: 0.06em;
+  }
+  #joy {
+    position: absolute; left: 18px; bottom: 18px; width: 124px; height: 124px;
+    border-radius: 50%; background: rgba(23, 16, 46, 0.55);
+    border: 2px solid rgba(255, 247, 234, 0.45);
+    pointer-events: auto; touch-action: none;
+  }
+  #joyKnob {
+    position: absolute; left: 50%; top: 50%; width: 54px; height: 54px;
+    border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+    background: rgba(255, 181, 46, 0.85); border: 2px solid rgba(255, 247, 234, 0.7);
+  }
+  #joyBtns {
+    position: absolute; right: 18px; bottom: 18px;
+    display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+  }
+  #joyBtns .round-btn {
+    pointer-events: auto; touch-action: none; width: 58px; height: 58px;
+    border-radius: 50%; border: 2px solid rgba(255, 247, 234, 0.5);
+    background: rgba(23, 16, 46, 0.72); color: #fff7ea; cursor: pointer;
+    font-family: inherit; font-size: 18px; font-weight: 900;
+  }
+  #joyBtns #btnRun {
+    width: auto; height: 46px; padding: 0 22px; border-radius: 999px;
+    background: #ff5f9e; color: #2b0718; font-size: 15px; letter-spacing: 0.1em;
+  }
+  #joyBtns #btnRadio {
+    width: auto; height: 36px; padding: 0 14px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 0.1em;
+  }
+  #dpad {
+    position: absolute; right: 14px; bottom: 14px; width: 244px; height: 244px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;
+    grid-template-rows: 1fr 1fr 1fr; pointer-events: auto; touch-action: none;
+  }
+  #dpad button {
+    border-radius: 14px; border: 2px solid rgba(255, 247, 234, 0.45);
+    background: rgba(23, 16, 46, 0.66); color: #fff7ea; font-size: 26px;
+    font-family: inherit; cursor: pointer; touch-action: none; pointer-events: auto;
+  }
+  #padUp { grid-column: 2; grid-row: 1; }
+  #padLeft { grid-column: 1; grid-row: 2; }
+  #padRight { grid-column: 3; grid-row: 2; }
+  #padDown { grid-column: 2; grid-row: 3; }
+  #btnGas {
+    position: absolute; right: 88px; bottom: 268px; width: 72px; height: 72px;
+    border-radius: 50%; border: 2px solid #ffe66d; background: #ffb52e;
+    color: #241203; font-family: inherit; font-size: 16px; font-weight: 900;
+    letter-spacing: 0.08em; cursor: pointer; pointer-events: auto; touch-action: none;
+    box-shadow: 0 5px 0 #a96f00, 0 8px 18px rgba(0, 0, 0, 0.5);
+  }
+  #mapCanvas {
+    width: 100%; height: 56vh; border-radius: 12px; background: #0d2440;
+    border: 2px solid rgba(255, 247, 234, 0.4);
+  }
+  #placesList {
+    width: min(680px, 94vw); max-height: 22vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .place-row {
+    display: flex; justify-content: space-between; gap: 12px; text-align: left;
+    padding: 8px 14px; border-radius: 9px; background: rgba(23, 16, 46, 0.9);
+    border: 1px solid rgba(255, 247, 234, 0.22); font-size: 14px;
+  }
+  .place-row .place-area { color: #ffb52e; font-weight: 700; }
+  .button-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .button-row .btn { min-width: 0; }
+  .quest-columns {
+    display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;
+    align-items: flex-start; width: min(860px, 96vw);
+  }
+  .quest-col {
+    flex: 1 1 300px; min-width: 260px; text-align: left; padding: 16px;
+    background: rgba(23, 16, 46, 0.9); border-radius: 14px;
+    border: 1px solid rgba(255, 247, 234, 0.25);
+  }
+  .quest-col h3 { letter-spacing: 0.14em; color: #ffb52e; margin-bottom: 10px; font-size: 16px; }
+  #shopItems { display: flex; flex-direction: column; gap: 9px; width: min(480px, 92vw); }
+  #shopItems .btn { width: 100%; min-width: 0; text-align: left; }
+  #shopMoney { color: #ffe66d; font-weight: 900; font-size: 18px; }
+  #statsBody { display: flex; flex-direction: column; gap: 7px; width: min(460px, 92vw); text-align: left; }
+  .stat-row {
+    display: flex; justify-content: space-between; padding: 8px 14px;
+    border-radius: 9px; background: rgba(23, 16, 46, 0.9); font-size: 15px;
+    border: 1px solid rgba(255, 247, 234, 0.2);
+  }
+  #endingTitle {
+    font-size: clamp(36px, 9vw, 72px); font-weight: 900; letter-spacing: 0.12em;
+    color: #ffb52e; text-shadow: 0 4px 0 #ff5f9e, 0 8px 22px rgba(0, 0, 0, 0.9);
+  }
+  #endingMeta { color: #ffb52e; font-size: 14px; letter-spacing: 0.08em; font-weight: 700; }
+  .setting-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 18px;
+    width: min(440px, 92vw); padding: 10px 16px; border-radius: 11px;
+    background: rgba(23, 16, 46, 0.9); border: 1px solid rgba(255, 247, 234, 0.22);
+    font-size: 15px; font-weight: 700;
+  }
+  .setting-row select {
+    padding: 7px 10px; border-radius: 8px; background: #17102e; color: #fff7ea;
+    border: 1px solid rgba(255, 247, 234, 0.4); font-family: inherit; font-size: 14px;
+  }
+  .setting-row input[type="range"] { width: 150px; accent-color: #ffb52e; }
+  .setting-row input[type="checkbox"] { width: 22px; height: 22px; accent-color: #ff5f9e; }
+  #scopeOverlay {
+    position: absolute; inset: 0; z-index: 30; pointer-events: none;
+    background: radial-gradient(circle at center, transparent 0, transparent 34vmin, rgba(0, 0, 0, 0.92) calc(34vmin + 2px), rgba(0, 0, 0, 0.97) 100%);
+  }
+  #scopeOverlay::before {
+    content: ""; position: absolute; left: 50%; top: 0; width: 2px; height: 100%;
+    transform: translateX(-50%); background: rgba(255, 60, 60, 0.75);
+  }
+  #scopeOverlay::after {
+    content: ""; position: absolute; top: 50%; left: 0; height: 2px; width: 100%;
+    transform: translateY(-50%); background: rgba(255, 60, 60, 0.75);
+  }
+  #fadeEl {
+    position: absolute; inset: 0; z-index: 60; background: #000000;
+    opacity: 0; pointer-events: none; transition: opacity 0.35s ease;
+  }
+  @media (max-width: 640px) {
+    #minimap { width: 118px; height: 118px; }
+    #starsEl { right: 142px; font-size: 19px; }
+    #dpad { width: 208px; height: 208px; }
+    #btnGas { bottom: 232px; right: 72px; }
+    #objectiveEl { max-width: 38vw; font-size: 11px; }
+    .btn { min-width: 200px; }
+  }
 </style>
 </head>
 <body>
-<div id="app"></div>
-<div id="scope"></div>
-<div id="hud">
-  <div id="topbar" class="panel">
-    <div id="money">$0</div>
-    <div id="healthWrap"><div id="healthFill"></div></div>
-    <div id="armourWrap"><div id="armourFill"></div></div>
-    <div id="weapon">Fists</div>
+<div id="app">
+  <div id="hud" style="display:none">
+    <div class="hud-topleft">
+      <div id="moneyEl">$0</div>
+      <div class="health-shell"><div id="healthFill"></div></div>
+    </div>
+    <div id="starsEl"></div>
+    <div id="objectiveEl"></div>
+    <div id="prisonEl" style="display:none"><span id="prisonText"></span></div>
+    <div id="bannerEl" style="display:none"></div>
+    <div id="dialogEl" style="display:none">
+      <div id="dialogName"></div>
+      <div id="dialogText"></div>
+      <div id="choiceRow">
+        <button id="choiceA" class="btn" type="button"></button>
+        <button id="choiceB" class="btn btn-ghost" type="button"></button>
+      </div>
+    </div>
+    <div id="promptEl" style="display:none"></div>
+    <div class="minimap-wrap">
+      <canvas id="minimap" width="148" height="148"></canvas>
+      <div class="minimap-btns">
+        <button id="btnZoom" class="btn" type="button">ZOOM · MID</button>
+        <button id="btnQuests" class="btn" type="button">QUESTS</button>
+        <button id="btnPause" class="btn" type="button">II</button>
+      </div>
+    </div>
+    <div id="radioEl"></div>
+    <div id="joy"><div id="joyKnob"></div></div>
+    <div id="joyBtns">
+      <button id="btnRun" class="round-btn" type="button">RUN</button>
+      <button id="btnInteract" class="round-btn" type="button">E</button>
+      <button id="btnEnter" class="round-btn" type="button">F</button>
+      <button id="btnAttack" class="round-btn" type="button">X</button>
+      <button id="btnRadio" class="round-btn" type="button">RADIO</button>
+    </div>
+    <button id="btnGas" type="button" style="display:none">GAS</button>
+    <div id="dpad" style="display:none">
+      <button id="padUp" type="button">▲</button>
+      <button id="padLeft" type="button">◀</button>
+      <button id="padRight" type="button">▶</button>
+      <button id="padDown" type="button">▼</button>
+    </div>
   </div>
-  <div id="stars"></div>
-  <div id="objectiveBox" class="panel"><span id="objective"></span></div>
-  <div id="district">Palm District</div>
-  <canvas id="minimap" width="150" height="190"></canvas>
-  <button id="zoomBtn">ZOOM · MID</button>
-  <button id="btnQuestHud">QUESTS</button>
-  <div id="hotbar"></div>
-  <div id="prompt" class="panel"></div>
-  <div id="bustWrap" class="panel">BUSTED METER<div id="bustBar"><div id="bustFill"></div></div></div>
-  <div id="dialogue" class="panel"><div id="dialogueWho"></div><div id="dialogueText"></div></div>
-  <div id="banner"></div>
-  <div id="speed" style="display:none"></div>
-</div>
-<div id="tutBox" class="panel"><span id="tutText"></span><button id="btnTutSkip">Skip tutorial</button></div>
-<div id="joy"><div id="joyKnob"></div></div>
-<div id="dpad"><div id="dpadCluster"><button id="padUp" aria-label="Throttle">▲</button><button id="padLeft" aria-label="Steer left">◀</button><button id="padRight" aria-label="Steer right">▶</button><button id="padDown" aria-label="Brake and reverse">▼</button></div></div>
-<div id="joyBtns"><button id="joyRun">RUN</button><button id="joyGas" style="display:none">GAS</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
-<div id="menu" class="overlay">
-  <h1>PALM COVE</h1>
-  <p class="sub">Courier <b>Vera Solano</b> — or her partner <b>Dario “Dax” Vega</b> — owes fixer <b>Lucia Marrero</b>, and Palm Cove collects its debts in cash, cars and close calls. A low-poly open-world crime game on a long Florida peninsula at dusk. New Game wakes you up at home.</p>
-  <div>
-    <button id="btnNew">NEW GAME</button>
-    <button id="btnContinue" class="secondary">LOAD GAME</button>
-    <button id="btnSettings" class="secondary">SETTINGS</button>
+
+  <div id="menu" class="screen">
+    <div class="menu-title">PALM COVE</div>
+    <p class="menu-subtitle">A low-poly open-world crime game on a long Florida peninsula at dusk.</p>
+    <button id="btnNew" class="btn" type="button">NEW GAME</button>
+    <button id="btnLoad" class="btn" type="button">LOAD</button>
+    <button id="btnSettings" class="btn btn-ghost" type="button">SETTINGS</button>
+    <button id="btnStats" class="btn btn-ghost" type="button">STATS</button>
+    <div class="menu-footer">An original game built for the make.fun gta6-01 bounty</div>
   </div>
-  <p id="saveInfo"></p>
-  <p class="controls">WASD move / drive · Mouse drag orbits the camera (it follows behind you as you turn) · Shift sprint · E enter car / building / shop · F punch / use · Click fire · 1–5 hotbar · X use item · Right-mouse/V sniper scope · R race · T taxi · B bail · Esc/P pause</p>
-</div>
-<div id="choiceMenu" class="overlay" style="background:linear-gradient(180deg, rgba(255,110,64,.12), rgba(25,18,56,.35))">
-  <h1 style="font-size:52px;font-style:italic;color:#ffd32a;text-shadow:0 4px 0 #e84393,0 8px 20px #000;margin:0">CHOOSE YOUR LEAD</h1>
-  <p style="font-size:17px;max-width:600px;text-shadow:0 2px 6px #000">Two couriers, one debt. The partner you don't pick still rides with Lucia's crew — you'll meet them at the garage. Whoever you pick wakes up in the same Coral Heights home.</p>
-  <div>
-    <button id="btnPickVera">PLAY AS VERA SOLANO</button>
-    <button id="btnPickDax">PLAY AS DAX VEGA</button>
+
+  <div id="choiceMenu" class="screen" style="display:none">
+    <h1>CHOOSE YOUR LEAD</h1>
+    <button id="btnVera" class="btn" type="button">VERA SOLANO — the courier. Blonde, pink tank, ice-cold.</button>
+    <button id="btnDax" class="btn" type="button">DARIO "DAX" VEGA — her partner. Hawaiian shirt, gold chain, loud.</button>
   </div>
-  <p style="font-size:15px;max-width:620px;text-shadow:0 2px 6px #000"><b style="color:#ff9ecf">VERA SOLANO</b> — blonde ponytail, pink tank, ripped jeans. The courier who owes the debt.<br><b style="color:#7ef0d4">DARIO “DAX” VEGA</b> — spiky hair, floral shirt, gold chain, pink trousers. Her partner, the getaway driver.</p>
-  <div><button id="btnChoiceBack" class="secondary">Back</button></div>
-</div>
-<div id="pauseMenu" class="overlay">
-  <h1 style="font-size:48px">PAUSED</h1>
-  <div><button id="btnResume">Resume</button><button id="btnQuests" class="secondary">Quest Log</button><button id="btnMap" class="secondary">Map</button><button id="btnStats2" class="secondary">Stats</button></div>
-  <div><button id="btnControls" class="secondary">Controls</button><button id="btnReplayFinale" class="secondary">Replay Finale</button><button id="btnSettings2" class="secondary">Settings</button><button id="btnRestart" class="secondary">Restart</button></div>
-  <div><button id="btnRadio" class="secondary">Radio: Neon FM</button></div>
-</div>
-<div id="questMenu" class="overlay">
-  <h1 style="font-size:38px;margin:4px">QUEST LOG</h1>
-  <div id="questBody" class="panel"></div>
-  <div><button id="btnQuestClose">Back</button></div>
-</div>
-<div id="controlsMenu" class="overlay">
-  <h1 style="font-size:38px;margin:4px">CONTROLS</h1>
-  <div class="ctrlgrid panel">
-    <table>
-      <tr><td colspan="2"><b>DESKTOP</b></td></tr>
-      <tr><td>W A S D / Arrows</td><td>Move / drive</td></tr>
-      <tr><td>Mouse drag</td><td>Orbit camera — it also eases behind you as you turn</td></tr>
-      <tr><td>Shift (hold)</td><td>Sprint on foot</td></tr>
-      <tr><td>Space (hold, while driving)</td><td>GAS boost</td></tr>
-      <tr><td>E</td><td>Enter / exit a vehicle · enter a building · shop</td></tr>
-      <tr><td>F</td><td>Punch · talk to a debtor · use (bed, counter, ATM, jewel case…)</td></tr>
-      <tr><td>Mouse click</td><td>Fire the equipped weapon</td></tr>
-      <tr><td>Right-mouse hold / V</td><td>Sniper scope</td></tr>
-      <tr><td>1–5</td><td>Select hotbar slot</td></tr>
-      <tr><td>X</td><td>Use the selected consumable</td></tr>
-      <tr><td>R</td><td>Start the Causeway Run race (in a car, at the start)</td></tr>
-      <tr><td>T</td><td>Start taxi work (in a car)</td></tr>
-      <tr><td>B</td><td>Pay bail while in prison</td></tr>
-      <tr><td>Esc / P</td><td>Pause / resume (map, quests, stats, controls, settings)</td></tr>
-      <tr><td>S (on title)</td><td>Stats screen</td></tr>
-      <tr><td colspan="2" style="padding-top:10px"><b>TOUCH</b></td></tr>
-      <tr><td>Joystick</td><td>Move on foot (enable it in Settings)</td></tr>
-      <tr><td>▲ ▼ ◀ ▶ buttons</td><td>Drive: the four drive buttons sit in ONE D-pad cluster (bottom-right): ▲ throttle · ▼ brake/reverse · ◀ ▶ steer (shown while driving, replacing the joystick)</td></tr>
-      <tr><td>Drag (right side)</td><td>Orbit camera — left side stays the joystick</td></tr>
-      <tr><td>RUN (hold)</td><td>Sprint on foot</td></tr>
-      <tr><td>GAS (hold, while driving)</td><td>Boost</td></tr>
-      <tr><td>E / F / X buttons</td><td>Interact · punch/use · use item</td></tr>
-      <tr><td>QUESTS button</td><td>Open the quest log</td></tr>
-      <tr><td>Hotbar slots</td><td>Tap to select</td></tr>
-    </table>
+
+  <div id="pauseMenu" class="screen" style="display:none">
+    <h1>PAUSED</h1>
+    <button id="btnResume" class="btn" type="button">RESUME</button>
+    <button id="btnPauseSettings" class="btn" type="button">SETTINGS</button>
+    <button id="btnPauseStats" class="btn" type="button">STATS</button>
+    <button id="btnQuitToTitle" class="btn btn-ghost" type="button">QUIT TO TITLE</button>
   </div>
-  <div><button id="btnControlsBack">Back</button></div>
-</div>
-<div id="mapMenu" class="overlay">
-  <h1 style="font-size:34px">PALM COVE — MAP</h1>
-  <canvas id="fullmap" width="300" height="540" style="border:2px solid rgba(255,255,255,.5);border-radius:10px"></canvas>
-  <div id="mapBtns"><button id="btnMapZoomOut" class="secondary" aria-label="Zoom out">−</button><button id="btnMapZoomIn" aria-label="Zoom in">+</button><button id="btnMapReset" class="secondary">RESET · WHOLE ISLAND</button><span id="mapZoomLabel" style="font-weight:800;color:#ffd32a">×1.0</span></div>
-  <div><button id="btnMapClose">Back</button></div>
-</div>
-<div id="settingsMenu" class="overlay">
-  <h1 style="font-size:44px">SETTINGS</h1>
-  <div class="panel" style="padding:18px 26px">
-    <div class="setrow"><span>Sound volume</span><input type="range" id="setVol" min="0" max="100" value="80"></div>
-    <div class="setrow"><span>Mute</span><input type="checkbox" id="setMute"></div>
-    <div class="setrow"><span>FPS cap</span><select id="setFps"><option value="60">60 FPS</option><option value="30">30 FPS</option></select></div>
-    <div class="setrow"><span>Graphics</span><select id="setQuality"><option value="standard">Standard</option><option value="hd">HD</option></select></div>
-    <div class="setrow"><span>Brightness</span><input type="range" id="setBright" min="50" max="150" value="100"></div>
-    <div class="setrow"><span>On-screen joystick</span><input type="checkbox" id="setJoy"></div>
-    <div class="setrow"><span>Radio</span><select id="setRadio"><option value="off">Off</option><option value="0">Neon FM</option><option value="1">Cove Funk</option><option value="2">Sunset Chill</option></select></div>
+
+  <div id="settingsMenu" class="screen" style="display:none">
+    <h1>SETTINGS</h1>
+    <label class="setting-row"><span>Sound</span><input id="setSound" type="checkbox" checked></label>
+    <label class="setting-row"><span>Frame rate</span>
+      <select id="setFps">
+        <option value="30">30</option>
+        <option value="60" selected>60</option>
+      </select>
+    </label>
+    <label class="setting-row"><span>Quality</span>
+      <select id="setQuality">
+        <option value="low">low</option>
+        <option value="high" selected>high</option>
+      </select>
+    </label>
+    <label class="setting-row"><span>Brightness</span><input id="setBrightness" type="range" min="0.6" max="1.4" step="0.05" value="1"></label>
+    <label class="setting-row"><span>Joystick size</span><input id="setJoystick" type="range" min="0.8" max="1.3" step="0.05" value="1"></label>
+    <button id="btnSettingsBack" class="btn" type="button">BACK</button>
   </div>
-  <div><button id="btnControls2" class="secondary">Controls</button><button id="btnSettingsBack">Back</button></div>
-</div>
-<div id="shopMenu" class="overlay">
-  <h1 style="font-size:40px" id="shopTitle">SHOP</h1>
-  <div id="shopBody"></div>
-  <p id="shopMsg" style="font-size:16px"></p>
-  <div><button id="btnShopClose">Leave (Esc)</button></div>
-</div>
-<div id="endingMenu" class="overlay">
-  <p style="font-size:15px;letter-spacing:3px;margin:0">ENDING REACHED</p>
-  <h1 id="endingName">CLEAN GETAWAY</h1>
-  <p id="endingText"></p>
-  <p id="endingMeta" style="opacity:.85"></p>
-  <div><button id="btnEndContinue">Continue Free Roam</button><button id="btnEndReplay" class="secondary">Replay Finale</button></div>
-</div>
-<div id="statsMenu" class="overlay">
-  <h1 style="font-size:48px">PALM COVE — STATS</h1>
-  <div class="statgrid panel" id="statsBody"></div>
-  <div><button id="btnStatsBack">Back</button></div>
+
+  <div id="mapOverlay" class="screen" style="display:none">
+    <h2>FULL MAP</h2>
+    <canvas id="mapCanvas" width="900" height="560"></canvas>
+    <div id="placesList"></div>
+    <div class="button-row">
+      <button id="btnMapIn" class="btn" type="button">+</button>
+      <button id="btnMapOut" class="btn" type="button">−</button>
+      <button id="btnMapReset" class="btn" type="button">RESET · WHOLE ISLAND</button>
+      <button id="btnMapClose" class="btn btn-ghost" type="button">Back</button>
+    </div>
+  </div>
+
+  <div id="questOverlay" class="screen" style="display:none">
+    <h2>QUEST LOG</h2>
+    <div class="quest-columns">
+      <div id="questMain" class="quest-col"><h3>MAIN QUESTS</h3></div>
+      <div id="questSide" class="quest-col"><h3>SIDE JOBS</h3></div>
+    </div>
+    <button id="btnQuestClose" class="btn" type="button">Back</button>
+  </div>
+
+  <div id="shopOverlay" class="screen" style="display:none">
+    <h2 id="shopTitle">SHOP</h2>
+    <div id="shopMoney">$0</div>
+    <div id="shopItems"></div>
+    <button id="btnShopClose" class="btn btn-ghost" type="button">Leave</button>
+  </div>
+
+  <div id="statsScreen" class="screen" style="display:none">
+    <h1>STATS</h1>
+    <div id="statsBody"></div>
+    <button id="btnStatsBack" class="btn" type="button">BACK</button>
+  </div>
+
+  <div id="endingScreen" class="screen" style="display:none">
+    <div id="endingTitle"></div>
+    <p id="endingText"></p>
+    <div id="endingMeta"></div>
+    <button id="btnEndingClose" class="btn" type="button">Keep playing</button>
+  </div>
+
+  <div id="scopeOverlay" style="display:none"></div>
+  <div id="fadeEl"></div>
 </div>
 <script src="vendor/three.min.js"></script>
-<script type="module" src="./src/main.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

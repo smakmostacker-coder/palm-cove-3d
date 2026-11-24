@@ -1,164 +1,156 @@
-// Pooled traffic: mixed-class AI vehicles looping the city grid, a handful
-// of highway cars running the long peninsula road, and the parked pool of
-// stealable vehicles — cars everywhere, a motorcycle, trucks, a police car
-// at the station, the damkar fire truck at the fire station, and a couple of
-// vehicles waiting at the far ends of the map (Keys, Panhandle Gate).
-//
-// City traffic obeys the traffic lights and stops for the player. Highway
-// cars just run their long straight line and wrap at the ends. Everything
-// resolves against building and prop colliders, so a traffic car nudges
-// around a tree instead of ghosting through it.
-import { ROADS, FIRE_STATION, POLICE_STATION } from './config.js';
-import { makeRng, pick } from './random.js';
-import { makeVehicle, LIGHT, groundHeightFor, collideBuildings, NORTH_END } from './city.js';
-import { peds } from './pedestrians.js';
+// traffic.js - ambient traffic AI.
+// Traffic cars are ordinary vehicles from driving.js with the
+// 'traffic' driver flag; this module only decides where they go.
 
-const COLORS = [0xe74c3c, 0x3498db, 0xf1c40f, 0x9b59b6, 0xe67e22, 0x1abc9c, 0xecf0f1, 0xfd79a8];
-export const trafficCars = [];  // {mesh,pos,axis,line,t,dir,speed,health,kind,burning,burnt,...}
-export const parkedCars = [];   // {mesh,pos,angle,health,speed,kind,name,...}
+import { vehicles, spawnTrafficCar, steerVehicleForTraffic } from './driving.js';
+import { CITY_ROADS_X, CITY_ROADS_Z, HIGHWAY, TOWNS } from './config.js';
+import { G } from './state.js';
+import { floatBetween, pickOne, chanceOf } from './random.js';
 
-function veh(mesh, kind, name) {
-  return { mesh, pos: mesh.position, kind, name, health: 100, speed: 0, curSpeed: 0, burning: 0, burnt: false, burnT: 0, sprayed: 0 };
+// Route target per vehicle, kept here because the vehicle record
+// is shared with systems that do not care about routing.
+const targets = new Map();
+const CITY_CRUISE = 11;
+const HIGHWAY_CRUISE = 16;
+const CITY_LIMIT = 220;
+
+function distanceTo(a, b) {
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dz * dz);
 }
 
-export function buildTraffic(scene, seed) {
-  const rng = makeRng(seed * 331 + 7);
-  const kinds = [];
-  for (let i = 0; i < 15; i++) kinds.push('car');
-  for (let i = 0; i < 4; i++) kinds.push('moto');
-  for (let i = 0; i < 3; i++) kinds.push('truck');
-  kinds.forEach((kind) => {
-    const mesh = makeVehicle(kind, pick(rng, COLORS), {});
-    scene.add(mesh);
-    const horiz = rng() < 0.5;
-    const v = veh(mesh, kind, kind);
-    Object.assign(v, {
-      axis: horiz ? 'x' : 'z', line: pick(rng, ROADS),
-      t: -190 + rng() * 380, dir: rng() < 0.5 ? 1 : -1,
-      speed: (kind === 'moto' ? 13 + rng() * 6 : kind === 'truck' ? 6 + rng() * 3 : 9 + rng() * 7) * 0.8, // round 5: AI traffic ~20% slower, in step with the calmer player handling
-      stopped: 0, highway: false,
-    });
-    trafficCars.push(v);
-  });
-  // Highway runners: sparse traffic for the long drive north.
-  for (let i = 0; i < 7; i++) {
-    const kind = i === 4 || i === 6 ? 'truck' : 'car';
-    const mesh = makeVehicle(kind, pick(rng, COLORS), {});
-    scene.add(mesh);
-    const v = veh(mesh, kind, kind);
-    Object.assign(v, {
-      axis: 'z', line: 0, t: -400 - rng() * 3400, dir: rng() < 0.5 ? 1 : -1,
-      speed: (15 + rng() * 7) * 0.8, stopped: 0, highway: true, // round 5: ~20% slower, as city traffic
-    });
-    trafficCars.push(v);
+function isInCity(pos) {
+  return Math.abs(pos.x) < CITY_LIMIT && Math.abs(pos.z) < CITY_LIMIT;
+}
+
+function nearestOf(values, value) {
+  let best = values[0];
+  let bestGap = Math.abs(values[0] - value);
+  for (let i = 1; i < values.length; i++) {
+    const gap = Math.abs(values[i] - value);
+    if (gap < bestGap) { best = values[i]; bestGap = gap; }
   }
-  // Parked pool. The tutorial car sits a few steps north of spawn; the rest
-  // spread across the districts, the stations, the Keys and the far north.
-  const spots = [
-    { x: 8, z: 48, angle: Math.PI, kind: 'car' }, { x: 7, z: 22, angle: 0, kind: 'car' },
-    { x: -71, z: -30, angle: Math.PI / 2, kind: 'car' }, { x: 79, z: 22, angle: -Math.PI / 2, kind: 'car' },
-    { x: -146, z: 90, angle: 0, kind: 'car' }, { x: 40, z: -71, angle: Math.PI / 2, kind: 'car' },
-    { x: -30, z: 154, angle: Math.PI / 2, kind: 'car' }, { x: 154, z: -90, angle: 0, kind: 'car' },
-    { x: -79, z: -120, angle: Math.PI / 2, kind: 'car' }, { x: 120, z: 79, angle: -Math.PI / 2, kind: 'car' },
-    { x: 71, z: 130, angle: -Math.PI / 2, kind: 'car' }, { x: -120, z: -4, angle: 0, kind: 'car' },
-    { x: 14, z: 66, angle: Math.PI, kind: 'moto' }, { x: -60, z: 84, angle: 0, kind: 'moto' },
-    { x: -120, z: 130, angle: Math.PI / 2, kind: 'truck' }, { x: 96, z: -140, angle: 0, kind: 'truck' },
-    { x: POLICE_STATION.x + 14, z: POLICE_STATION.z + 4, angle: Math.PI / 2, kind: 'police' },
-    { x: FIRE_STATION.x - 14, z: FIRE_STATION.z + 4, angle: -Math.PI / 2, kind: 'firetruck' },
-    { x: 2, z: 392, angle: 0, kind: 'car' }, { x: -10, z: 262, angle: Math.PI, kind: 'moto' },
-    { x: 6, z: -1400, angle: 0, kind: 'car' }, { x: -6, z: -3960, angle: Math.PI, kind: 'car' },
-    { x: 8, z: -4190, angle: 0, kind: 'truck' },
-    // Town parked cars (Round 5): 3 per peninsula town, at the main-street
-    // edge (z = line ± 6.5), aligned with the EW street. Every x below was
-    // picked from the seeded build's collider list: the car's footprint
-    // (x ± 2.4, z ± 1.0) sits >= 3 units from every building AABB and from
-    // the facility doors, clear of the NS cross streets (x ±38 / ±45).
-    // PALMETTO FLATS (z=-1420; doors MART 17 / MOTEL 51 at z=-1425.8):
-    { x: -82, z: -1426.5, angle: Math.PI / 2, kind: 'car' }, { x: -2, z: -1413.5, angle: -Math.PI / 2, kind: 'car' },
-    { x: 90, z: -1426.5, angle: Math.PI / 2, kind: 'car' },
-    // CYPRESS JUNCTION (z=-2080; doors GAS -24 / DINER 67 at z=-2085.8):
-    { x: -79, z: -2086.5, angle: Math.PI / 2, kind: 'car' }, { x: -2, z: -2073.5, angle: -Math.PI / 2, kind: 'car' },
-    { x: 89, z: -2086.5, angle: Math.PI / 2, kind: 'car' },
-    // TALLAHASSEE PALMS (z=-4180; doors APOTIK -129 / MOTEL -113 at z=-4185.8):
-    { x: -75, z: -4186.5, angle: Math.PI / 2, kind: 'car' }, { x: 25, z: -4173.5, angle: -Math.PI / 2, kind: 'car' },
-    { x: 113, z: -4186.5, angle: Math.PI / 2, kind: 'car' },
-  ];
-  const NAMES = { car: 'car', moto: 'motorcycle', truck: 'truck', police: 'police car', firetruck: 'fire truck' };
-  spots.forEach((s, i) => {
-    const sports = i === 5;
-    const color = s.kind === 'police' ? 0xffffff : s.kind === 'firetruck' ? 0xd63031 : sports ? 0xff3838 : pick(rng, COLORS);
-    const mesh = makeVehicle(s.kind, color, sports ? { spoiler: true, len: 4.8 } : {});
-    mesh.position.set(s.x, 0, s.z);
-    mesh.rotation.y = s.angle;
-    scene.add(mesh);
-    const v = veh(mesh, s.kind, sports ? 'red Comet sports car' : NAMES[s.kind]);
-    v.angle = s.angle; v.taken = false; v.isTarget = false;
-    parkedCars.push(v);
-  });
-}
-
-const _v = new THREE.Vector3();
-export function updateTraffic(dt, playerPos) {
-  for (const c of trafficCars) {
-    if (c.burnt) continue;
-    if (c.stopped > 0) c.stopped -= dt;
-    let atRed = false;
-    if (!c.highway) { // lights only exist inside the city grid
-      const go = c.axis === 'x' ? LIGHT.xGo : LIGHT.zGo;
-      if (!go) for (const r of ROADS) {
-        const ahead = (r - c.t) * c.dir;
-        if (ahead > 1 && ahead < 10) { atRed = true; break; }
-      }
-    }
-    const sp = c.stopped > 0 || c.burning || atRed ? 0 : c.speed;
-    c.curSpeed = sp;
-    c.t += sp * c.dir * dt;
-    const lo = c.highway ? NORTH_END + 60 : -195, hi = c.highway ? -230 : 195;
-    if (c.t > hi) c.t = lo;
-    if (c.t < lo) c.t = hi;
-    const lane = c.dir > 0 ? 3.2 : -3.2;
-    // Stateful surface per car (the axis hint only seeds the first
-    // sample inside a band): a deck-route car stays on the deck for the
-    // whole crossing and a street-route car stays underneath — neither
-    // can wedge half-buried inside the structure.
-    if (c.axis === 'x') {
-      c.mesh.position.set(c.t, groundHeightFor(c, c.t, c.line + lane, 'x'), c.line + lane);
-      c.mesh.rotation.y = c.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-    } else {
-      c.mesh.position.set(c.line + lane, groundHeightFor(c, c.line + lane, c.t, 'z'), c.t);
-      c.mesh.rotation.y = c.dir > 0 ? Math.PI : 0;
-    }
-    collideBuildings(c.mesh.position, 1.4); // buildings and props are solid
-    _v.copy(c.mesh.position).sub(playerPos);
-    if (Math.abs(_v.x) < 5 && Math.abs(_v.z) < 5) c.stopped = Math.max(c.stopped, 0.4);
-    for (const w of c.mesh.userData.wheels) w.rotation.x += sp * dt * 2;
-  }
-}
-
-export function allVehicles() {
-  return trafficCars.concat(parkedCars.filter((p) => !p.taken));
-}
-
-// Carjacking: the driver of an occupied traffic vehicle is pulled out at
-// his own door and becomes a pedestrian on the street. The driver is
-// played by a pooled ped taken from far away (never one on screen, never
-// a flagged taxi fare); it is re-routed onto the nearest sidewalk so it
-// can flee from the thief and then stroll off like anyone else.
-export function ejectDriver(c) {
-  let best = null, bd = -1;
-  for (const p of peds) {
-    if (p.flagged || p.down > 0 || p.town) continue; // town peds stay in their town — never stolen as a jacked driver
-    const d = p.mesh.position.distanceTo(c.pos);
-    if (d > bd) { bd = d; best = p; }
-  }
-  if (!best) return null;
-  const ry = c.mesh.rotation.y, fx = Math.sin(ry), fz = Math.cos(ry);
-  const px = c.pos.x + fz * 2.1, pz = c.pos.z - fx * 2.1; // the driver's side
-  best.mesh.position.set(px, 0.3, pz);
-  const line = ROADS.reduce((a, r) => (Math.abs(r - pz) < Math.abs(a - pz) ? r : a), ROADS[0]);
-  best.axis = 'x'; best.line = line; best.side = pz >= line ? 1 : -1;
-  best.t = Math.max(-195, Math.min(195, px)); best.dir = 1;
-  best.fleeFrom = { x: c.pos.x, z: c.pos.z };
-  best.flee = 2.4; best.down = 0;
   return best;
 }
+
+function setTarget(vehicle, x, z, highway) {
+  targets.set(vehicle, { x, z, highway: Boolean(highway) });
+}
+
+// A point further along the car's own road, so a fresh spawn starts
+// by driving its street instead of cutting across blocks.
+function firstCityTarget(vehicle, vertical) {
+  if (vertical) setTarget(vehicle, vehicle.pos.x, pickOne(CITY_ROADS_Z), false);
+  else setTarget(vehicle, pickOne(CITY_ROADS_X), vehicle.pos.z, false);
+}
+
+// At an intersection, turn onto a perpendicular road: snap to the
+// crossing, then aim along the crossing road to another junction.
+function nextCityTarget(vehicle) {
+  const crossX = nearestOf(CITY_ROADS_X, vehicle.pos.x);
+  const crossZ = nearestOf(CITY_ROADS_Z, vehicle.pos.z);
+  if (chanceOf(0.5)) setTarget(vehicle, pickOne(CITY_ROADS_X), crossZ, false);
+  else setTarget(vehicle, crossX, pickOne(CITY_ROADS_Z), false);
+}
+
+// Highway cars run the road end to end and back past every town;
+// jitter keeps them off a single rail line.
+function nextHighwayTarget(vehicle, current) {
+  const headingSouth = current && current.z > -2000;
+  const endZ = headingSouth ? HIGHWAY.to + 50 : HIGHWAY.from - 40;
+  setTarget(vehicle, HIGHWAY.x + floatBetween(-3, 3), endZ, true);
+}
+
+function pickNextTarget(vehicle) {
+  const current = targets.get(vehicle);
+  if (current && current.highway) nextHighwayTarget(vehicle, current);
+  else if (isInCity(vehicle.pos)) nextCityTarget(vehicle);
+  // Off both networks, route back to the highway to reconnect.
+  else setTarget(vehicle, HIGHWAY.x, floatBetween(-400, 100), true);
+}
+
+// Teleport a far car back near the player, on a real road and never
+// within 60 of them, so it never pops in right in front of anyone.
+function respawnVehicle(vehicle, playerPos) {
+  let x = playerPos.x;
+  let z = playerPos.z - 300;
+  let highway = false;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const ring = floatBetween(250, 400);
+    const dir = chanceOf(0.5) ? -1 : 1;
+    if (isInCity(playerPos) && chanceOf(0.6)) {
+      if (chanceOf(0.5)) {
+        x = nearestOf(CITY_ROADS_X, playerPos.x + dir * ring * 0.4);
+        z = playerPos.z + dir * ring;
+      } else {
+        x = playerPos.x + dir * ring;
+        z = nearestOf(CITY_ROADS_Z, playerPos.z + dir * ring * 0.4);
+      }
+      highway = false;
+    } else {
+      x = HIGHWAY.x + floatBetween(-3, 3);
+      z = playerPos.z + dir * ring;
+      highway = true;
+    }
+    if (distanceTo({ x, z }, playerPos) >= 60) break;
+  }
+  vehicle.pos.x = x;
+  vehicle.pos.z = z;
+  vehicle.speed = 0;
+  vehicle.angle = highway && chanceOf(0.5) ? Math.PI : 0;
+  vehicle.mesh.rotation.y = vehicle.angle;
+  if (highway) setTarget(vehicle, HIGHWAY.x, vehicle.angle === Math.PI ? HIGHWAY.to + 50 : 150, true);
+  else firstCityTarget(vehicle, chanceOf(0.5));
+}
+
+export function initTraffic(scene) {
+  // Six cars working the city grid, split across both road axes.
+  for (let i = 0; i < 6; i++) {
+    const vertical = chanceOf(0.5);
+    let car;
+    if (vertical) {
+      car = spawnTrafficCar(scene, pickOne(CITY_ROADS_X), floatBetween(-200, 200), chanceOf(0.5) ? 0 : Math.PI);
+    } else {
+      car = spawnTrafficCar(scene, floatBetween(-200, 200), pickOne(CITY_ROADS_Z), chanceOf(0.5) ? Math.PI / 2 : -Math.PI / 2);
+    }
+    firstCityTarget(car, vertical);
+  }
+  // Four highway cars spaced down the long road past the towns.
+  const highwayZ = [-500, -1500, -2600, -3600];
+  for (let i = 0; i < highwayZ.length; i++) {
+    const southbound = i % 2 === 0;
+    const car = spawnTrafficCar(scene, HIGHWAY.x + floatBetween(-3, 3), highwayZ[i], southbound ? Math.PI : 0);
+    setTarget(car, HIGHWAY.x, southbound ? HIGHWAY.to + 50 : 150, true);
+  }
+}
+
+export function updateTraffic(dt, playerPos) {
+  if (dt <= 0 || !playerPos) return;
+  // Anchor recycling on the driven car when there is one, so traffic
+  // stays around the action instead of a parked player position.
+  const anchor = G.driving ? G.driving.pos : playerPos;
+  for (let i = 0; i < vehicles.length; i++) {
+    const v = vehicles[i];
+    if (v.driver !== 'traffic' || v.wrecked) continue;
+    if (distanceTo(v.pos, anchor) > 700) respawnVehicle(v, anchor);
+    let target = targets.get(v);
+    if (!target) { pickNextTarget(v); target = targets.get(v); }
+    let cruise = isInCity(v.pos) ? CITY_CRUISE : HIGHWAY_CRUISE;
+    // Courtesy stop: the player inside the forward cone, close
+    // ahead, makes the car wait for this frame instead of hitting.
+    const toX = playerPos.x - v.pos.x;
+    const toZ = playerPos.z - v.pos.z;
+    const playerDist = Math.sqrt(toX * toX + toZ * toZ);
+    if (playerDist > 0.01 && playerDist < 6.5) {
+      const dot = (Math.sin(v.angle) * toX + Math.cos(v.angle) * toZ) / playerDist;
+      if (dot > 0.8) cruise = 0;
+    }
+    const remaining = steerVehicleForTraffic(v, dt, target.x, target.z, cruise);
+    if (remaining < 7) pickNextTarget(v);
+  }
+}
+
+// Referenced so the town list stays part of this module's contract:
+// highway routing is defined relative to those stops.
+export const TRAFFIC_TOWNS = TOWNS;

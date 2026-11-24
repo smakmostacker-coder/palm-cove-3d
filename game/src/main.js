@@ -1,886 +1,914 @@
-// Palm Cove boot and game loop: the dusk peninsula world, the wake-up
-// opening in the lead's own home, a first-run tutorial, branching endings,
-// sniper + fire + damkar, five vehicle classes, the 5-slot hotbar, walk-in
-// interiors, working facilities + prison, a quest log with free tracking,
-// and the settings system (volume, FPS cap, Standard/HD graphics,
-// brightness, virtual joystick). All full-screen overlays go through one
-// state machine (showOverlay/enforceChrome below) — no handler pokes an
-// overlay's display directly — and touch drags on the canvas orbit the
-// camera through the same orbitCamera() path as the mouse.
-import { G, resetStats } from './state.js';
-import { districtAt, SPAWN, HOSPITAL } from './config.js';
-import { buildCity, updateLights, landmarkAt, makeProtagonist, buildingCounts, worldLength, NORTH_END } from './city.js';
-import { buildTraffic, updateTraffic, parkedCars, trafficCars } from './traffic.js';
-import { buildPeds, updatePeds, peds } from './pedestrians.js';
-import { buildPlayer, player, updatePlayer, updateCamera, orbitCamera, setCharacter, strideState } from './player.js';
-import { nearestStealable, nearestJackable, carjack, enterCar, exitCar, updateDriving, vehicleHitCheck } from './driving.js';
-import { buildPolice, updatePolice, commitCrime, policePositions, cops, officers } from './police.js';
-import { punch, shoot } from './combat.js';
-import { initMissions, updateMissions, onAction, onEnterCar, startRace, startTaxi, sidePrompt, missionTarget, startCurrentMission, setEndingHandler, replayFinale, computeEnding, finishFinale, setPartner, ENDINGS, questLogData, setTrackedQuest, getTrackedQuest } from './missions.js';
-import { initHud, updateHud, showDialogue, showBanner, drawFullMap, zoomFullMap, panFullMap, resetFullMapView, getFullMapView, fullMapZoomFactor, fullMapPixelToWorld } from './hud.js';
-import { saveGame, loadSave, applySave, clearSave } from './save.js';
-import { parseShot, stageShot } from './shots.js';
-import { sfx, radio } from './audio.js';
-import { initFire, updateFire, fireState, forceIgnite } from './fire.js';
-import { buildFacilities, nearestFacility, buyItem, sendToPrison, updatePrison, payBail, FACILITIES, nearestInterior, enterInterior, updateInteriors, tryInteriorAction, setInteriorExitHook, startWakeUp, updateWake, cancelWake, isWaking, ENTERABLES } from './facilities.js';
-import { addItem, selectSlot, useSelected, syncWeapon, emptyInv, ITEM_DEFS } from './inventory.js';
-import { settings, loadSettings, applySettings, onGraphics } from './settings.js';
+// Palm Cove — main orchestrator: boot, menus, input, loop.
+// Built to the module contracts; THREE is a global from the vendor script.
 
-loadSettings();
-const { shot, seed } = parseShot();
-G.seed = seed;
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 420);
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25));
-renderer.setSize(innerWidth, innerHeight);
-renderer.domElement.className = 'webgl';
-document.getElementById('app').appendChild(renderer.domElement);
+import { G, resetRunState } from './state.js';
+import { TUNING, SPAWN, HOME_DOOR, HOSPITAL_POS } from './config.js';
+import { seedWith } from './random.js';
+import { buildWorld, updateCity, isLand, floorHeight, collideWorld } from './city.js';
+import {
+  player, partner, buildLead, buildPartner, placeAt, startWakeUp, isWaking,
+  updatePlayer, updatePartner, cam, updateCamera,
+} from './player.js';
+import {
+  vehicles, spawnVehicles, nearestVehicle, enterVehicle, exitVehicle,
+  updateDriving, adoptVehicle, damageVehicle,
+} from './driving.js';
+import { initTraffic, updateTraffic } from './traffic.js';
+import { peds, initPeds, updatePeds, hurtPed } from './pedestrians.js';
+import { buildPolice, commitCrime, updatePolice, tryJackCop } from './police.js';
+import { initCombat, updateCombat } from './combat.js';
+import { initFire, updateFire, spawnFire } from './fire.js';
+import { INV, selectSlot, buildPickups, updatePickups } from './inventory.js';
+import {
+  buildInteriors, interiorSpot, updateFacilities, updatePrison, sendToPrison, DOORS,
+} from './facilities.js';
+import { initMissions, updateMissions, getQuests, ENDINGS, startWakeFlow } from './missions.js';
+import {
+  initHud, updateHud, showOverlay, setHudVisible, say, showBanner, setObjective,
+  openMap, closeMap, isMapOpen, isShopOpen, isChoiceOpen, renderQuests,
+  showStats, showEnding,
+} from './hud.js';
+import { saveGame, loadGame, applySave, wipeSave } from './save.js';
+import { applyVisualSettings, frameInterval } from './settings.js';
+import { initAudio, sfx, radio } from './audio.js';
+import { applyShotStaging } from './shots.js';
 
-const city = buildCity(scene, seed);
-// Character-choice display pair: both leads stand on the beach in front of
-// the deco strip, in the title/choice camera frame.
-for (const [who, z] of [['vera', 100], ['dax', 109]]) {
-  const disp = makeProtagonist(who);
-  disp.scale.setScalar(1.7);
-  disp.position.set(207, 0.3, z);
-  disp.rotation.y = Math.PI / 2;
-  scene.add(disp);
-}
-buildTraffic(scene, seed);
-buildPeds(scene, seed);
-buildPlayer(scene);
-buildPolice(scene);
-buildFacilities(scene);
-initFire(scene);
-initHud();
-initMissions(scene, city.marker, showDialogue);
-
+// --- tiny DOM helper -------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const menu = $('menu'), hud = $('hud'), pauseMenu = $('pauseMenu'), statsMenu = $('statsMenu');
-const shopMenu = $('shopMenu'), endingMenu = $('endingMenu'), mapMenu = $('mapMenu'), settingsMenu = $('settingsMenu');
-const questMenu = $('questMenu'), controlsMenu = $('controlsMenu');
+const appEl = $('app');
 
-// ---- Overlay state machine ---------------------------------------------------
-// Single source of truth for which full-screen overlay is visible. Handlers
-// call showOverlay(name) (null = none) and never poke overlay displays
-// directly; enforceChrome() runs every frame and keeps the overlays, the
-// HUD and the touch controls consistent with overlayNow and G.mode.
-const OVERLAYS = {
-  menu: menu, choice: $('choiceMenu'), pause: pauseMenu, stats: statsMenu,
-  settings: settingsMenu, shop: shopMenu, ending: endingMenu, map: mapMenu,
-  quest: questMenu, controls: controlsMenu,
-};
-let overlayNow = 'menu';
-function showOverlay(name) {
-  overlayNow = name;
-  for (const [key, el] of Object.entries(OVERLAYS)) {
-    if (el) el.style.display = key === name ? 'flex' : 'none';
+// --- shared run-time state (not part of G: pure UI / input bookkeeping) ----
+let autosaveClock = 0;
+let settingsReturn = 'menu'; // 'menu' | 'pause'
+let statsReturn = 'menu'; // 'menu' | 'pause'
+let overlayReturn = null; // overlay we came from, for quests/stats closes
+let lastDriving = null; // last G.driving value seen, to sync touch controls
+let titleAngle = 0; // slow orbit angle for the title backdrop
+let hudVisible = false; // mirrors setHudVisible so the loop can cheaply test it
+
+// Input state lives in stage 2 but is referenced by helpers defined here,
+// so declare the queues up front and let stage 2 fill the handlers.
+let interactQueued = false;
+let vehicleQueued = false;
+let attackPressQueued = false;
+
+// --- renderer / scene / camera ---------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+appEl.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+// Dusk look: deep violet sky so neon and sunset light read against it.
+scene.background = new THREE.Color(0x241536);
+scene.fog = new THREE.Fog(0x2a1838, 120, 900);
+
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 3000);
+camera.position.set(0, 40, 120);
+camera.lookAt(0, 4, 0);
+
+// Hemisphere fill keeps shadowed streets readable at dusk.
+const hemi = new THREE.HemisphereLight(0x8a6bbf, 0x2e1a12, 0.75);
+scene.add(hemi);
+
+// Low warm sun, angled like it is about to set over the bay.
+const sun = new THREE.DirectionalLight(0xff9a3c, 1.1);
+sun.position.set(-180, 90, 60);
+sun.castShadow = true;
+scene.add(sun);
+
+// --- world build (order matters: ground first, actors after) --------------
+seedWith(20261124);
+buildWorld(scene);
+buildInteriors(scene);
+buildPolice(scene);
+initPeds(scene);
+spawnVehicles(scene);
+initTraffic(scene);
+buildPickups(scene);
+initMissions(scene);
+initFire(scene);
+initCombat(scene);
+initHud();
+
+// Visual settings touch both the page container and the renderer.
+applyVisualSettings(appEl, renderer);
+
+// Shadows follow the quality setting; applyVisualSettings may have changed
+// it, so sync the sun once here — later changes re-run applyVisualSettings.
+sun.castShadow = G.settings.quality !== 'low';
+
+// --- partner placement helper ----------------------------------------------
+// The partner waits at home until the story moves them; buildPartner only
+// creates the mesh, so main owns the initial placement.
+function placePartnerAtHome() {
+  if (partner && partner.mesh) {
+    partner.mesh.position.set(HOME_DOOR.x, 0, HOME_DOOR.z);
+    if (partner.pos) partner.pos.set(HOME_DOOR.x, 0, HOME_DOOR.z);
   }
 }
-function enforceChrome() {
-  for (const [key, el] of Object.entries(OVERLAYS)) {
-    if (!el) continue;
-    const want = key === overlayNow ? 'flex' : 'none';
-    if (el.style.display !== want) el.style.display = want;
-  }
-  const hudWant = G.mode !== 'title' && !(G.mode === 'stats' && G.prevMode === 'title') ? 'block' : 'none';
-  if (hud.style.display !== hudWant) hud.style.display = hudWant;
-  const joyOn = settings.joystick && G.mode === 'playing';
-  const joyEl = $('joy'), joyBtnsEl = $('joyBtns');
-  // While driving on touch, the slide joystick is replaced by the D-pad
-  // (initDrivePad): hide the stick, show the four direction buttons.
-  const joyWant = joyOn && !G.driving ? 'block' : 'none';
-  if (joyEl.style.display !== joyWant) joyEl.style.display = joyWant;
-  const dpadEl = $('dpad');
-  if (dpadEl) {
-    const dpadWant = joyOn && G.driving ? 'block' : 'none';
-    if (dpadEl.style.display !== dpadWant) dpadEl.style.display = dpadWant;
-    if (!G.driving && (G.driveTouch.up || G.driveTouch.down || G.driveTouch.left || G.driveTouch.right)) {
-      G.driveTouch.up = G.driveTouch.down = G.driveTouch.left = G.driveTouch.right = false;
-    }
-  }
-  const btnsWant = joyOn ? 'flex' : 'none';
-  if (joyBtnsEl.style.display !== btnsWant) joyBtnsEl.style.display = btnsWant;
-  // RUN and GAS swap by mode: RUN is the on-foot sprint button, GAS is
-  // the driving boost button — only the one that applies is shown.
-  const runEl = $('joyRun'), gasEl = $('joyGas');
-  if (runEl && gasEl) {
-    const runWant = G.driving ? 'none' : '';
-    const gasWant = G.driving ? '' : 'none';
-    if (runEl.style.display !== runWant) runEl.style.display = runWant;
-    if (gasEl.style.display !== gasWant) gasEl.style.display = gasWant;
-  }
-}
-onGraphics((s) => {
-  if (s.quality === 'hd') { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); if (scene.fog) scene.fog.far = 560; camera.far = 760; }
-  else { renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25)); if (scene.fog) scene.fog.far = 320; camera.far = 420; }
-  camera.updateProjectionMatrix();
-});
-applySettings();
-// Boot state: exactly the title menu — no choice overlay, no touch controls.
-showOverlay('menu');
-enforceChrome();
 
-function refreshSaveInfo() {
-  const s = loadSave();
-  $('saveInfo').textContent = s
-    ? 'Save found: $' + s.money + ' · missions ' + Math.min(4, s.stats ? s.stats.missions : 0) + '/4 · endings ' + ((s.endingsUnlocked || []).length) + '/6 · ' + new Date(s.savedAt).toLocaleString()
-    : 'No save yet — New Game starts the story.';
-  $('btnContinue').style.opacity = s ? '1' : '0.45';
-  $('btnContinue').textContent = s ? 'LOAD GAME' : 'LOAD GAME (no save yet)';
-}
-refreshSaveInfo();
-
-// The story intro (Lucia's first message + the mission marker) fires when
-// the lead first steps out of the home — not before.
-let introPending = false;
-setInteriorExitHook((id) => {
-  tutFlags.interacted = true;
-  if (id === 'home' && introPending) {
-    introPending = false;
-    startCurrentMission(true);
-  }
-});
-
-function startPlaying(useSave) {
-  cancelWake(player);
-  if (useSave) { applySave(loadSave()); syncWeapon(); }
-  else {
-    clearSave();
-    G.money = 120; G.missionIndex = 0; G.missionStage = 0; G.storyDone = false;
-    G.weapon = 'Fists'; G.weapons = ['Fists']; G.sniperAmmo = 0; G.armour = 0; G.bankVault = 0;
-    G.inventory = emptyInv(); G.selectedSlot = 0; G.endingsUnlocked = []; G.lastEnding = ''; G.inPrison = 0;
-    resetStats();
-  }
-  setCharacter(G.character || 'vera');
-  setPartner();
-  G.health = 100; G.wanted = 0; G.bust = 0; G.scoped = false;
-  if (G.driving) exitCar();
-  player.pos.set(SPAWN.x, 0.3, SPAWN.z);
-  player.mesh.visible = true;
-  G.onFoot = true;
+// --- entering play -----------------------------------------------------------
+function enterPlaying() {
   G.mode = 'playing';
   showOverlay(null);
-  window.__titleCam = null;
-  if (useSave) {
-    startCurrentMission(true);
-  } else {
-    // Wake-up opening: the chosen lead starts in their own bed, at home.
-    introPending = true;
-    startWakeUp(player);
-  }
-  saveGame();
+  setHudVisible(true);
+  hudVisible = true;
+  syncTouchControls();
+  autosaveClock = 0;
 }
 
-function completionPct() {
-  return Math.min(100, Math.round((Math.min(4, G.stats.missions) / 4) * 50 + Math.min(20, G.stats.side * 10) + Math.min(30, G.endingsUnlocked.length * 10)));
+// --- new game ----------------------------------------------------------------
+function startGame(leadId) {
+  resetRunState();
+  G.lead = leadId;
+  G.partner = leadId === 'vera' ? 'dax' : 'vera';
+  buildLead(scene, leadId);
+  buildPartner(scene, G.partner);
+  placePartnerAtHome();
+  // Wake-up opens inside the home interior, not on the street.
+  const spot = interiorSpot('home');
+  G.interior = 'home';
+  placeAt(spot.x, spot.z, 0);
+  startWakeUp(spot);
+  startWakeFlow();
+  enterPlaying();
 }
-function showStats() {
-  G.prevMode = G.mode;
-  G.mode = 'stats';
-  showOverlay('stats');
-  const bc = G.stats.byClass || {};
-  $('statsBody').innerHTML =
-    'Vehicles stolen: <b>' + G.stats.stolen + '</b> (car ' + (bc.car || 0) + ' · moto ' + (bc.moto || 0) + ' · truck ' + (bc.truck || 0) + ' · police ' + (bc.police || 0) + ' · fire truck ' + (bc.firetruck || 0) + ')<br>' +
-    'Distance driven: <b>' + G.stats.drivenKm.toFixed(2) + ' km</b><br>' +
-    'Story missions completed: <b>' + G.stats.missions + ' / 4</b><br>' +
-    'Side activities done: <b>' + G.stats.side + '</b><br>' +
-    'Debtors spared: <b>' + G.track.spared + '</b> · taken out: <b>' + G.track.tookOut + '</b> · Times busted: <b>' + G.track.busted + '</b><br>' +
-    'Endings unlocked: <b>' + G.endingsUnlocked.length + ' / 6</b>' + (G.endingsUnlocked.length ? ' — ' + G.endingsUnlocked.map((e) => ENDINGS[e].name).join(', ') : '') + '<br>' +
-    'Punches thrown: <b>' + G.stats.punches + '</b> · Shots fired: <b>' + G.stats.shotsFired + '</b><br>' +
-    'Money: <b>$' + G.money + '</b> · Earned (story): <b>$' + G.track.earned + '</b><br>Completion: <b>' + completionPct() + '%</b>';
-}
-function closeStats() {
-  if (G.prevMode === 'playing' || G.prevMode === 'paused') { G.mode = 'paused'; showOverlay('pause'); }
-  else { G.mode = 'title'; showOverlay('menu'); }
-}
-function showEnding(id, def) {
-  G.mode = 'ending';
-  $('endingName').textContent = def.name;
-  $('endingText').textContent = def.text.replaceAll('Vera', G.character === 'dax' ? 'Dax' : 'Vera');
-  $('endingMeta').textContent = 'Ending ' + G.endingsUnlocked.length + ' of 6 unlocked · Spared ' + G.track.spared + ' · Took out ' + G.track.tookOut + ' · Earned $' + G.track.earned + ' · Busted ×' + G.track.busted;
-  showOverlay('ending');
-  sfx.success();
-}
-setEndingHandler(showEnding);
-$('btnNew').onclick = () => {
-  showOverlay('choice');
-  window.__titleCam = { pos: [246, 10, 168], look: [168, 9, 108] };
-};
-$('btnPickVera').onclick = () => { G.character = 'vera'; startPlaying(false); };
-$('btnPickDax').onclick = () => { G.character = 'dax'; startPlaying(false); };
-$('btnChoiceBack').onclick = () => { showOverlay('menu'); window.__titleCam = null; };
-$('btnContinue').onclick = () => { if (loadSave()) startPlaying(true); };
-$('btnResume').onclick = () => { G.mode = 'playing'; showOverlay(null); };
-$('btnRestart').onclick = () => startPlaying(false);
-$('btnStats2').onclick = showStats;
-$('btnStatsBack').onclick = closeStats;
-$('btnEndContinue').onclick = () => { showOverlay(null); G.mode = 'playing'; };
-$('btnEndReplay').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
-$('btnReplayFinale').onclick = () => { showOverlay(null); replayFinale(); G.mode = 'playing'; };
-// ---- Full map: two ways in, and closing returns to wherever it opened from -
-// From the pause menu (mapFrom 'pause') closing goes back to the pause
-// overlay with the mode still 'paused'; from a tap on the HUD minimap
-// (mapFrom 'game') the world freezes (mode 'paused') while the map is up
-// and closing drops straight back into gameplay.
-let mapFrom = 'pause';
-function openMap(from) {
-  mapFrom = from;
-  if (from === 'game') G.mode = 'paused';
-  resetFullMapView(); // every open starts on the whole island
-  showOverlay('map');
-  drawFullMap();
-  syncMapZoomLabel();
-}
-function syncMapZoomLabel() {
-  const l = $('mapZoomLabel');
-  if (l) l.textContent = '×' + fullMapZoomFactor().toFixed(1);
-}
-// Full-map zoom controls: + / − buttons, RESET back to the whole island,
-// drag to pan, and pinch to zoom — all redrawing through hud.js's view
-// state so markers and the PLACES list stay consistent at every level.
-$('btnMapZoomIn').onclick = () => { zoomFullMap(1.6); drawFullMap(); syncMapZoomLabel(); };
-$('btnMapZoomOut').onclick = () => { zoomFullMap(1 / 1.6); drawFullMap(); syncMapZoomLabel(); };
-$('btnMapReset').onclick = () => { resetFullMapView(); drawFullMap(); syncMapZoomLabel(); };
-(function initFullMapGestures() {
-  const cv = $('fullmap');
-  if (!cv) return;
-  const pointers = new Map();
-  let pinchDist = 0;
-  const toCanvasPx = (e) => {
-    const r = cv.getBoundingClientRect();
-    return { x: (e.clientX - r.left) * (cv.width / r.width), y: (e.clientY - r.top) * (cv.height / r.height), cx: e.clientX, cy: e.clientY };
-  };
-  cv.addEventListener('pointerdown', (e) => {
-    pointers.set(e.pointerId, toCanvasPx(e));
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      pinchDist = Math.hypot(a.cx - b.cx, a.cy - b.cy);
-    }
-    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
-  });
-  cv.addEventListener('pointermove', (e) => {
-    if (!pointers.has(e.pointerId)) return;
-    const prev = pointers.get(e.pointerId);
-    const now = toCanvasPx(e);
-    pointers.set(e.pointerId, now);
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      const d = Math.hypot(a.cx - b.cx, a.cy - b.cy);
-      if (pinchDist > 0 && Math.abs(d - pinchDist) > 4) {
-        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        zoomFullMap(d / pinchDist, fullMapPixelToWorld(cv, mid.x, mid.y));
-        pinchDist = d;
-        drawFullMap(); syncMapZoomLabel();
-      }
-      return;
-    }
-    if (pointers.size === 1) {
-      const v = getFullMapView();
-      const dxW = -(now.x - prev.x) / cv.width * v.halfW * 2;
-      const dzW = -(now.y - prev.y) / cv.height * v.halfH * 2;
-      if (dxW || dzW) { panFullMap(dxW, dzW); drawFullMap(); }
-    }
-  });
-  const end = (e) => { pointers.delete(e.pointerId); pinchDist = 0; };
-  cv.addEventListener('pointerup', end);
-  cv.addEventListener('pointercancel', end);
-  cv.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const p = toCanvasPx(e);
-    zoomFullMap(e.deltaY < 0 ? 1.2 : 1 / 1.2, fullMapPixelToWorld(cv, p.x, p.y));
-    drawFullMap(); syncMapZoomLabel();
-  }, { passive: false });
-})();
-function closeMap() {
-  if (mapFrom === 'game') { showOverlay(null); G.mode = 'playing'; }
-  else showOverlay('pause');
-}
-$('btnMap').onclick = () => openMap('pause');
-$('btnMapClose').onclick = closeMap;
-// Tapping the HUD minimap (and only the minimap — it is a DOM canvas above
-// the WebGL canvas, so taps on it never reach the touch-orbit handler)
-// opens the full map straight from gameplay.
-$('minimap').addEventListener('click', () => {
-  if (G.mode !== 'playing') return;
-  openMap('game');
-});
-// The minimap ZOOM button sits directly under the minimap canvas; its tap
-// must cycle the zoom and NEVER fall through to the minimap's tap-to-open
-// handler. It is a sibling element (so events never targeted the canvas),
-// but belt-and-braces: swallow the press at the button in capture phase on
-// every pointer flavour, and let hud.js's click handler do the cycling.
-(function hardenZoomBtn() {
-  const zb = $('zoomBtn');
-  if (!zb) return;
-  for (const t of ['pointerdown', 'touchstart', 'mousedown']) {
-    zb.addEventListener(t, (e) => { e.stopPropagation(); }, { capture: true, passive: true });
-  }
-})();
 
-// ---- Settings panel ---------------------------------------------------------
-let settingsFrom = 'title';
-function openSettings(from) {
-  settingsFrom = from;
-  syncSettingsUI();
+// --- loaded game ---------------------------------------------------------------
+function startLoadedGame(data) {
+  // applySave restores lead/money/stats first so the meshes match the save.
+  applySave(data);
+  const leadId = G.lead || 'vera';
+  buildLead(scene, leadId);
+  buildPartner(scene, G.partner || (leadId === 'vera' ? 'dax' : 'vera'));
+  placePartnerAtHome();
+  const p = data && data.playerPos ? data.playerPos : SPAWN;
+  placeAt(p.x, p.z, p.angle || 0);
+  G.interior = null;
+  enterPlaying();
+}
+
+// --- settings / stats plumbing (full wiring in stage 3, entry points here) ---
+function openSettings(returnTo) {
+  settingsReturn = returnTo || 'menu';
+  // Reflect current settings into the controls before showing the panel.
+  const s = G.settings;
+  const setSound = $('setSound'); if (setSound) setSound.value = String(!!s.sound);
+  const setFps = $('setFps'); if (setFps) setFps.value = String(s.fps);
+  const setQuality = $('setQuality'); if (setQuality) setQuality.value = String(s.quality);
+  const setBrightness = $('setBrightness'); if (setBrightness) setBrightness.value = String(s.brightness);
+  const setJoystick = $('setJoystick'); if (setJoystick) setJoystick.value = String(s.joystick);
   showOverlay('settings');
+  if (settingsReturn === 'menu') G.mode = 'settings';
+  else G.mode = 'paused';
 }
-function closeSettings() {
-  if (settingsFrom === 'pause') { G.mode = 'paused'; showOverlay('pause'); }
-  else { G.mode = 'title'; showOverlay('menu'); }
-}
-function syncSettingsUI() {
-  $('setVol').value = Math.round(settings.volume * 100);
-  $('setMute').checked = settings.muted;
-  $('setFps').value = String(settings.fpsCap);
-  $('setQuality').value = settings.quality;
-  $('setBright').value = Math.round(settings.brightness * 100);
-  $('setJoy').checked = settings.joystick;
-  $('setRadio').value = settings.radioOn ? String(settings.radioStation) : 'off';
-  syncRadioUI();
-}
-// ---- Radio (backsound): starts on the first gesture, K / pause button /
-// touch RADIO button / Settings row all cycle the same stations + Off.
-function syncRadioUI() {
-  const btn = $('btnRadio');
-  if (btn) btn.textContent = 'Radio: ' + radio.stationName;
-}
-function cycleRadio() {
-  const name = radio.cycle();
-  syncRadioUI();
-  showDialogue('Radio', name === 'Off' ? 'Radio off.' : 'Now playing: ' + name, 2.5);
-}
-$('btnRadio').onclick = cycleRadio;
-syncRadioUI();
-addEventListener('pointerdown', () => radio.start(), { once: true });
-addEventListener('keydown', () => radio.start(), { once: true });
-$('btnSettings').onclick = () => openSettings('title');
-$('btnSettings2').onclick = () => openSettings('pause');
-$('btnSettingsBack').onclick = closeSettings;
-$('setVol').oninput = (e) => { settings.volume = e.target.value / 100; applySettings(); sfx.pickup(); };
-$('setMute').onchange = (e) => { settings.muted = e.target.checked; applySettings(); };
-$('setFps').onchange = (e) => { settings.fpsCap = parseInt(e.target.value, 10); applySettings(); };
-$('setQuality').onchange = (e) => { settings.quality = e.target.value; applySettings(); };
-$('setBright').oninput = (e) => { settings.brightness = e.target.value / 100; applySettings(); };
-$('setRadio').onchange = (e) => {
-  if (e.target.value === 'off') radio.setOn(false);
-  else radio.setStation(parseInt(e.target.value, 10));
-  syncRadioUI();
-};
-$('setJoy').onchange = (e) => {
-  settings.joystick = e.target.checked;
-  applySettings(); // enforceChrome() owns the joy/joyBtns display now
-};
 
-// ---- Controls help: one screen, both input methods, from pause or settings -
-let controlsFrom = 'pause';
-function openControls(from) {
-  controlsFrom = from;
-  showOverlay('controls');
+function openStats(returnTo) {
+  statsReturn = returnTo || 'menu';
+  showStats();
+  if (statsReturn === 'menu') G.mode = 'stats';
+  else G.mode = 'paused';
 }
-$('btnControls').onclick = () => openControls('pause');
-$('btnControls2').onclick = () => openControls('settings');
-$('btnControlsBack').onclick = () => {
-  if (controlsFrom === 'settings') showOverlay('settings');
-  else if (G.mode === 'paused') showOverlay('pause');
-  else showOverlay('menu');
-};
 
-// ---- Quest log ---------------------------------------------------------------
-function openQuestLog() {
-  if (G.mode === 'playing') G.mode = 'paused';
-  renderQuestLog();
-  showOverlay('quest');
-}
-function renderQuestLog() {
-  const data = questLogData();
-  const row = (q, kind) => {
-    const tracked = data.tracked === q.id && (kind === 'side' || q.state === 'current');
-    const tick = q.state === 'done' ? '☑' : q.state === 'locked' ? '🔒' : '☐';
-    return '<div class="qrow' + (tracked ? ' tracked' : '') + '" data-qid="' + q.id + '" data-kind="' + kind + '">' +
-      '<div class="qtitle">' + tick + ' ' + q.title + (tracked ? ' <span class="qtrack">TRACKED</span>' : '') + (q.count ? ' <span class="qcount">×' + q.count + '</span>' : '') + '</div>' +
-      '<div class="qdesc">' + q.desc + '</div>' +
-      (q.reward ? '<div class="qmeta">Reward: ' + q.reward + ' · ' + q.hint + '</div>' : '') +
-      '</div>';
-  };
-  $('questBody').innerHTML =
-    '<h2 class="qhead">MAIN QUEST — Lucia\'s debt</h2>' + data.main.map((q) => row(q, 'main')).join('') +
-    '<h2 class="qhead">SIDE QUESTS — whenever you like</h2>' + data.side.map((q) => row(q, 'side')).join('') +
-    '<p class="qmeta">Tap a quest to track it — the HUD objective and the world marker switch to it. One tracked at a time; switching is free.</p>';
-  for (const el of $('questBody').querySelectorAll('.qrow')) {
-    el.addEventListener('click', () => {
-      const qid = el.dataset.qid;
-      if (el.dataset.kind === 'side' || qid === 'main') setTrackedQuest(qid);
-      renderQuestLog();
-    });
+function backFromSettings() {
+  if (settingsReturn === 'menu') {
+    showOverlay('menu');
+    G.mode = 'title';
+  } else {
+    showOverlay('pause');
+    G.mode = 'paused';
   }
 }
-$('btnQuests').onclick = openQuestLog;
-$('btnQuestHud').onclick = () => { if (G.mode === 'playing') openQuestLog(); };
-$('btnQuestClose').onclick = () => {
-  if (G.mode === 'paused') showOverlay('pause');
-  else showOverlay(null);
-};
 
-// ---- Shops -------------------------------------------------------------------
-let shopFac = null;
-function openShop(fac) {
-  shopFac = fac;
-  G.mode = 'shop';
-  $('shopTitle').textContent = fac.name;
-  renderShop('Welcome to ' + fac.name + '. Cash: $' + G.money);
-  showOverlay('shop');
-}
-function renderShop(msg) {
-  $('shopMsg').textContent = msg;
-  const body = $('shopBody');
-  body.innerHTML = '';
-  if (!shopFac.shop.length) { body.innerHTML = '<p>Nothing for sale here.</p>'; return; }
-  for (const row of shopFac.shop) {
-    const b = document.createElement('button');
-    b.textContent = ITEM_DEFS[row.item].icon + ' ' + ITEM_DEFS[row.item].name + ' — $' + row.price;
-    b.onclick = () => renderShop(buyItem(shopFac, row.item, showDialogue) + ' Cash: $' + G.money);
-    body.appendChild(b);
+function backFromStats() {
+  if (statsReturn === 'menu') {
+    showOverlay('menu');
+    G.mode = 'title';
+  } else {
+    showOverlay('pause');
+    G.mode = 'paused';
   }
 }
-$('btnShopClose').onclick = () => { showOverlay(null); G.mode = 'playing'; };
+
+// --- menu wiring ---------------------------------------------------------------
+// Audio needs a user gesture, so every menu click primes it.
+function primeAudio() {
+  try { initAudio(); } catch (e) { /* audio is optional; never block boot */ }
+}
+document.addEventListener('pointerdown', primeAudio, { once: true });
+
+const btnNew = $('btnNew');
+if (btnNew) btnNew.addEventListener('click', () => { primeAudio(); showOverlay('choice'); G.mode = 'choice'; });
+
+const btnVera = $('btnVera');
+if (btnVera) btnVera.addEventListener('click', () => { primeAudio(); startGame('vera'); });
+
+const btnDax = $('btnDax');
+if (btnDax) btnDax.addEventListener('click', () => { primeAudio(); startGame('dax'); });
+
+const btnLoad = $('btnLoad');
+if (btnLoad) {
+  // Probe once at boot: no save means the button stays disabled.
+  let probe = null;
+  try { probe = loadGame(); } catch (e) { probe = null; }
+  if (!probe) btnLoad.disabled = true;
+  btnLoad.addEventListener('click', () => {
+    primeAudio();
+    const data = loadGame();
+    if (data) startLoadedGame(data);
+    else btnLoad.disabled = true;
+  });
+}
+
+const btnSettings = $('btnSettings');
+if (btnSettings) btnSettings.addEventListener('click', () => { primeAudio(); openSettings('menu'); });
+
+const btnStats = $('btnStats');
+if (btnStats) btnStats.addEventListener('click', () => { primeAudio(); openStats('menu'); });
+
+// --- screenshot staging --------------------------------------------------------
+// Staging must run after boot so a ?shot= URL can skip the menu entirely.
+const shotApi = {
+  startGame,
+  startLoadedGame,
+  placeAt,
+  teleport: placeAt,
+  enterNearestCar,
+  setWanted(n) { G.wanted = n; },
+  openMap,
+  commitCrime,
+  G,
+  player,
+  scene,
+  camera,
+};
+
+function enterNearestCar() {
+  const v = nearestVehicle(player.pos, 6);
+  if (!v) return false;
+  enterVehicle(v, player.pos);
+  if (player.mesh) player.mesh.visible = false;
+  syncTouchControls();
+  return true;
+}
+
+let staged = false;
+try {
+  staged = applyShotStaging(location.search, shotApi) === true;
+} catch (e) {
+  staged = false;
+}
+if (!staged) {
+  G.mode = G.mode || 'title';
+  showOverlay('menu');
+  setHudVisible(false);
+  hudVisible = false;
+}
+
+// ===========================================================================
+// STAGE 2 — input: keyboard, touch joystick/buttons, mouse camera.
+// Queues (interact / vehicle / attack press) are edge-triggered and consumed
+// exactly once per frame by the loop in stage 3.
+// ===========================================================================
+
+const keys = new Set(); // e.code values currently held
+const joyVec = { x: 0, y: 0 }; // analog stick, -1..1 per axis
+let touchRun = false;
+let touchBoost = false;
+let touchAttack = false;
+let padThrottle = 0; // -1 | 0 | 1 from the driving D-pad
+let padSteer = 0; // -1 | 0 | 1 from the driving D-pad
+let mouseHeld = false;
+
+function isDown(code) { return keys.has(code); }
+function anyDown(...codes) { return codes.some((c) => keys.has(c)); }
+
+// --- overlay helpers shared by keyboard and touch ---------------------------
+function toggleMap() {
+  if (isMapOpen()) { closeMap(); return; }
+  if (G.mode === 'playing') openMap();
+}
+
+function openQuests() {
+  if (G.mode !== 'playing' && G.mode !== 'paused') return;
+  overlayReturn = G.mode === 'paused' ? 'pause' : null;
+  renderQuests(getQuests());
+  showOverlay('quests');
+  G.mode = 'paused'; // quests pause the world; close returns to playing
+}
+
+function closeQuests() {
+  showOverlay(overlayReturn === 'pause' ? 'pause' : null);
+  G.mode = overlayReturn === 'pause' ? 'paused' : 'playing';
+  overlayReturn = null;
+}
 
 function pauseGame() {
   if (G.mode !== 'playing') return;
   G.mode = 'paused';
   showOverlay('pause');
-  saveGame();
 }
-function gameOver(kind) {
-  G.overKind = kind;
-  G.overTimer = 3;
-  showBanner(kind === 'busted' ? 'BUSTED' : 'WASTED', 3);
-  sfx.fail();
-  G.wanted = 0; G.bust = 0; G.health = 100; G.scoped = false;
-  if (G.driving) exitCar();
-  cancelWake(player);
-  if (kind === 'busted') {
-    G.track.busted++;
-    G.mode = 'over';
-    G.money = Math.max(0, G.money - 50);
-    const cell = sendToPrison();
-    player.pos.set(cell.x, 0.3, cell.z);
-    showDialogue('Guard', 'Processing done. Serve your time in the yard — or post bail with B.', 5);
+
+function resumeGame() {
+  showOverlay(null);
+  G.mode = 'playing';
+}
+
+// Escape closes the topmost overlay first, and only pauses when none is open.
+function handleEscape() {
+  if (isMapOpen()) { closeMap(); return; }
+  if (isChoiceOpen && isChoiceOpen()) { showOverlay('menu'); G.mode = 'title'; return; }
+  const mode = G.mode;
+  if (mode === 'paused') {
+    // Figure out which paused panel is up by checking overlay visibility.
+    const quest = $('questOverlay');
+    if (quest && !quest.classList.contains('hidden') && quest.style.display !== 'none' && quest.offsetParent !== null) { closeQuests(); return; }
+    resumeGame();
+    return;
+  }
+  if (mode === 'settings') { backFromSettings(); return; }
+  if (mode === 'stats') { backFromStats(); return; }
+  if (mode === 'playing') pauseGame();
+}
+
+// --- keyboard -----------------------------------------------------------------
+window.addEventListener('keydown', (e) => {
+  const code = e.code;
+  if (code === 'Space') e.preventDefault(); // keep the page from scrolling
+  const wasDown = keys.has(code);
+  keys.add(code);
+  if (e.repeat) return; // edges below fire once per physical press
+  switch (code) {
+    case 'KeyE': interactQueued = true; break;
+    case 'KeyF': vehicleQueued = true; break;
+    case 'KeyX': attackPressQueued = true; break;
+    case 'KeyK': try { radio.toggle(); } catch (err) { /* radio optional */ } break;
+    case 'KeyM': toggleMap(); break;
+    case 'KeyQ': if (G.mode === 'playing') openQuests(); break;
+    case 'KeyP': if (G.mode === 'playing') pauseGame(); else if (G.mode === 'paused') resumeGame(); break;
+    case 'Escape': handleEscape(); break;
+    case 'Digit1': selectSlot(0); break;
+    case 'Digit2': selectSlot(1); break;
+    case 'Digit3': selectSlot(2); break;
+    case 'Digit4': selectSlot(3); break;
+    case 'Digit5': selectSlot(4); break;
+    default: break;
+  }
+  void wasDown;
+});
+window.addEventListener('keyup', (e) => { keys.delete(e.code); });
+window.addEventListener('blur', () => {
+  // Losing focus must not leave a movement key stuck on.
+  keys.clear();
+  touchRun = false; touchBoost = false; touchAttack = false;
+  padThrottle = 0; padSteer = 0; mouseHeld = false;
+});
+
+// --- touch joystick -------------------------------------------------------------
+const joyEl = $('joy');
+const joyKnob = $('joyKnob');
+let joyPointerId = null;
+
+function setKnob(dx, dy) {
+  if (joyKnob) joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+}
+
+if (joyEl) {
+  joyEl.addEventListener('pointerdown', (e) => {
+    joyPointerId = e.pointerId;
+    joyEl.setPointerCapture(e.pointerId);
+    moveJoy(e);
+  });
+  joyEl.addEventListener('pointermove', (e) => { if (e.pointerId === joyPointerId) moveJoy(e); });
+  const endJoy = (e) => {
+    if (e.pointerId !== joyPointerId) return;
+    joyPointerId = null;
+    joyVec.x = 0; joyVec.y = 0;
+    setKnob(0, 0);
+  };
+  joyEl.addEventListener('pointerup', endJoy);
+  joyEl.addEventListener('pointercancel', endJoy);
+}
+
+function moveJoy(e) {
+  const rect = joyEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let dx = e.clientX - cx;
+  let dy = e.clientY - cy;
+  const len = Math.hypot(dx, dy);
+  const max = 44; // knob travel clamp, px
+  if (len > max) { dx = (dx / len) * max; dy = (dy / len) * max; }
+  setKnob(dx, dy);
+  joyVec.x = dx / max;
+  joyVec.y = dy / max;
+}
+
+// --- touch buttons: hold vs tap ---------------------------------------------------
+// Hold buttons set a flag while the finger is down; tap buttons queue an edge.
+function bindHold(el, set) {
+  if (!el) return;
+  const on = (e) => { e.preventDefault(); set(true); };
+  const off = (e) => { e.preventDefault(); set(false); };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+  el.addEventListener('pointerleave', off);
+}
+function bindTap(el, fn) {
+  if (!el) return;
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); fn(); });
+}
+
+bindHold($('btnRun'), (v) => { touchRun = v; });
+bindHold($('btnGas'), (v) => { touchBoost = v; });
+bindHold($('btnAttack'), (v) => { if (v) attackPressQueued = true; touchAttack = v; });
+bindHold($('padUp'), (v) => { padThrottle = v ? 1 : (padThrottle > 0 ? 0 : padThrottle); });
+bindHold($('padDown'), (v) => { padThrottle = v ? -1 : (padThrottle < 0 ? 0 : padThrottle); });
+// Left pad means steer -1, right pad steer +1 (screen direction, not key code).
+bindHold($('padLeft'), (v) => { padSteer = v ? -1 : (padSteer < 0 ? 0 : padSteer); });
+bindHold($('padRight'), (v) => { padSteer = v ? 1 : (padSteer > 0 ? 0 : padSteer); });
+
+bindTap($('btnInteract'), () => { interactQueued = true; });
+bindTap($('btnEnter'), () => { vehicleQueued = true; });
+bindTap($('btnRadio'), () => { try { radio.toggle(); } catch (err) { /* optional */ } });
+bindTap($('btnPause'), () => { if (G.mode === 'playing') pauseGame(); });
+bindTap($('btnQuests'), () => { if (G.mode === 'playing') openQuests(); });
+bindTap($('btnZoom'), () => {
+  // Minimap zoom cycles through three ranges; hud reads G.minimapZoom.
+  G.minimapZoom = G.minimapZoom >= 3 ? 1 : (G.minimapZoom || 1) + 1;
+});
+
+// A real click on the minimap opens the full map (drags are for the camera).
+const minimapEl = $('minimap');
+if (minimapEl) minimapEl.addEventListener('click', () => { if (G.mode === 'playing') openMap(); });
+
+// --- mouse camera + click attack ----------------------------------------------------
+const canvas = renderer.domElement;
+let dragId = null;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragMoved = false;
+let lastDragX = 0;
+let lastDragY = 0;
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  dragId = e.pointerId;
+  dragStartX = lastDragX = e.clientX;
+  dragStartY = lastDragY = e.clientY;
+  dragMoved = false;
+  mouseHeld = true;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== dragId) return;
+  const dx = e.clientX - lastDragX;
+  const dy = e.clientY - lastDragY;
+  lastDragX = e.clientX;
+  lastDragY = e.clientY;
+  if (!dragMoved && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > 4) dragMoved = true;
+  // Only a real drag orbits; a click must stay a click (it becomes an attack).
+  if (dragMoved) cam.orbitBy(dx, dy);
+});
+const endDrag = (e) => {
+  if (e.pointerId !== dragId) return;
+  dragId = null;
+  mouseHeld = false;
+  if (!dragMoved && G.mode === 'playing') attackPressQueued = true;
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.dist = Math.max(5, Math.min(14, cam.dist + (e.deltaY > 0 ? 1 : -1)));
+}, { passive: false });
+
+// --- touch control layout -------------------------------------------------------------
+// Driving swaps the stick for the D-pad: the two layouts never show together.
+function syncTouchControls() {
+  const driving = !!G.driving;
+  const joy = $('joy'); const joyBtns = $('joyBtns');
+  const dpad = $('dpad'); const btnGas = $('btnGas');
+  if (driving) {
+    if (joy) joy.style.display = 'none';
+    if (joyBtns) joyBtns.style.display = 'none';
+    if (dpad) dpad.style.display = '';
+    if (btnGas) btnGas.style.display = '';
   } else {
-    G.track.wasted++;
-    G.mode = 'over';
-    const fee = G.money >= 50 ? 50 : G.money;
-    G.money -= fee;
-    player.pos.set(HOSPITAL.x + 12, 0.3, HOSPITAL.z + 12);
-    if (fee) showDialogue('Hospital', 'Treatment fee: $' + fee + '. Try not to need us again today.', 4);
+    if (joy) joy.style.display = '';
+    if (joyBtns) joyBtns.style.display = '';
+    if (dpad) dpad.style.display = 'none';
+    if (btnGas) btnGas.style.display = 'none';
   }
-  player.mesh.visible = true;
-  G.onFoot = true;
-  saveGame();
+  lastDriving = G.driving;
 }
 
-// ---- Tutorial -----------------------------------------------------------------
-// First-run only, woven into the wake-up: one contextual prompt at a time,
-// labelled for the input method in use, advancing only when the player
-// actually does the thing. It never blocks input and hides in menus.
-// State persists in localStorage: done or skipped means never again.
-const TUT_KEY = 'palm-cove-tutorial-v1';
-const tutFlags = { interacted: false, slot: false, combat: false };
-let tutStep = 0, tutDone = false, tutAnchor = null, tutYawAcc = 0, tutLastYaw = 0;
-try {
-  const t = JSON.parse(localStorage.getItem(TUT_KEY) || 'null');
-  if (t && t.done) tutDone = true;
-  else if (t) tutStep = t.step || 0;
-} catch (e) { /* fresh tutorial */ }
-function tutPersist() {
-  try { localStorage.setItem(TUT_KEY, JSON.stringify({ done: tutDone, step: tutStep })); } catch (e) { /* best effort */ }
+// --- per-frame input shaping ------------------------------------------------------------
+// Keyboard axes plus the analog stick, rotated by camera yaw into world space.
+function computeWish() {
+  let ix = 0;
+  let iz = 0;
+  if (anyDown('KeyW', 'ArrowUp')) iz -= 1;
+  if (anyDown('KeyS', 'ArrowDown')) iz += 1;
+  if (anyDown('KeyA', 'ArrowLeft')) ix -= 1;
+  if (anyDown('KeyD', 'ArrowRight')) ix += 1;
+  ix += joyVec.x;
+  iz += joyVec.y;
+  let mag = Math.hypot(ix, iz);
+  if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
+  // Camera yaw defines "forward" on screen; rotate the screen vector by it.
+  const sin = Math.sin(cam.yaw);
+  const cos = Math.cos(cam.yaw);
+  const mx = ix * cos - iz * sin;
+  const mz = ix * sin + iz * cos;
+  const run = anyDown('ShiftLeft', 'ShiftRight') || touchRun;
+  return { mx, mz, mag, run };
 }
-const isTouch = () => settings.joystick || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
-const TUT_STEPS = [
-  { d: 'Move — W A S D or the arrow keys', t: 'Move — drag the joystick', done: () => tutAnchor && Math.hypot(player.pos.x - tutAnchor.x, player.pos.z - tutAnchor.z) > 4 },
-  { d: 'Look around — drag the mouse', t: 'Look around — drag on the screen', done: () => tutYawAcc > 0.7 },
-  { d: 'Sprint — hold Shift while moving', t: 'Sprint — hold the RUN button while moving', done: () => player.sprinting },
-  { d: 'Interact — E at doors, shops and cars. Head out of the house', t: 'Interact — tap E at doors, shops and cars. Head out of the house', done: () => tutFlags.interacted },
-  { d: 'Hotbar — press 1–5 to select a slot, X uses an item', t: 'Hotbar — tap a slot to select it, X uses an item', done: () => tutFlags.slot },
-  { d: 'Steal a vehicle — walk to a car and press E', t: 'Steal a vehicle — walk to a car and tap E', done: () => !!G.driving },
-  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — one D-pad cluster (bottom-right): ▲ throttle · ▼ brake/reverse · ◀ ▶ steer · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
-  { d: 'Fight — F punches · mouse click fires an equipped weapon', t: 'Fight — F punches · the fire button shoots an equipped weapon', done: () => tutFlags.combat },
-];
-function updateTutorial() {
-  const box = $('tutBox');
-  if (tutDone || G.mode !== 'playing') { box.style.display = 'none'; return; }
-  const step = TUT_STEPS[tutStep];
-  if (!step) { tutDone = true; tutPersist(); box.style.display = 'none'; return; }
-  if (!tutAnchor) { tutAnchor = { x: player.pos.x, z: player.pos.z }; tutLastYaw = G.camYaw; }
-  tutYawAcc += Math.abs(((G.camYaw - tutLastYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-  tutLastYaw = G.camYaw;
-  box.style.display = 'flex';
-  $('tutText').textContent = 'TUTORIAL ' + (tutStep + 1) + '/' + TUT_STEPS.length + ' — ' + (isTouch() ? step.t : step.d);
-  if (step.done()) {
-    tutStep++;
-    tutAnchor = null; tutYawAcc = 0;
-    tutPersist();
-    sfx.pickup();
-    if (tutStep >= TUT_STEPS.length) {
-      tutDone = true; tutPersist();
-      showDialogue('Palm Cove', 'Tutorial complete — the Cove is yours. Lucia\'s work is on the marker.', 4);
-    }
-  }
-}
-$('btnTutSkip').onclick = () => { tutDone = true; tutPersist(); $('tutBox').style.display = 'none'; };
 
-// ---- Input ---------------------------------------------------------------------
-function doInteract() {
-  tutFlags.interacted = true;
-  if (G.interior) return; // leaving a room is by walking through its door
-  if (G.driving) { exitCar(); return; }
-  const ent = nearestInterior(player.pos);
-  if (ent) { enterInterior(ent, player.pos); return; }
-  const fac = nearestFacility(player.pos);
-  if (fac) { openShop(fac); return; }
-  const jk = nearestJackable();
-  if (jk) { carjack(jk); onEnterCar(jk.car); return; }
-  const car = nearestStealable();
-  if (car) { enterCar(car); onEnterCar(car); }
+// Driving input is digital by design: D-pad on touch, keys on desktop.
+function computeDriveInput() {
+  let throttle = 0;
+  if (anyDown('KeyW', 'ArrowUp')) throttle += 1;
+  if (anyDown('KeyS', 'ArrowDown')) throttle -= 1;
+  throttle += padThrottle;
+  throttle = Math.max(-1, Math.min(1, throttle));
+  let steer = 0;
+  if (anyDown('KeyA', 'ArrowLeft')) steer -= 1;
+  if (anyDown('KeyD', 'ArrowRight')) steer += 1;
+  steer += padSteer;
+  steer = Math.max(-1, Math.min(1, steer));
+  const boost = isDown('Space') || touchBoost;
+  return { throttle, steer, boost };
 }
-function doPunch() {
-  if (G.driving) return;
-  if (G.interior && tryInteriorAction(player.pos, showDialogue)) return;
-  punch(player.pos);
-  tutFlags.combat = true;
-  onAction('punch', player.pos);
+
+function attackHeldNow() {
+  return isDown('KeyX') || touchAttack || (mouseHeld && dragMoved === false && dragId !== null) || (mouseHeld && !dragId);
 }
-function doSelectSlot(i) { selectSlot(i); tutFlags.slot = true; }
-window.__selectSlot = (i) => { if (G.mode === 'playing') doSelectSlot(i); };
-addEventListener('keydown', (e) => {
-  G.keys[e.code] = true;
-  if (e.code === 'Space') e.preventDefault();
-  if ((G.mode === 'playing' || G.mode === 'over') && e.code === 'KeyB' && G.inPrison > 0) payBail(player.pos, showDialogue);
-  else if (G.mode === 'playing') {
-    if (e.code === 'Escape' || e.code === 'KeyP') pauseGame();
-    else if (e.code === 'KeyE') doInteract();
-    else if (e.code === 'KeyF') doPunch();
-    else if (e.code === 'KeyR') startRace(player.pos);
-    else if (e.code === 'KeyT') startTaxi();
-    else if (e.code === 'KeyX') useSelected();
-    else if (e.code === 'KeyK') cycleRadio();
-    else if (e.code === 'KeyV' && G.weapon === 'Sniper') G.scoped = !G.scoped;
-    else if (/^Digit[1-5]$/.test(e.code)) doSelectSlot(parseInt(e.code.slice(5), 10) - 1);
-  } else if (overlayNow === 'map' && e.code === 'Escape') {
-    closeMap();
-  } else if (G.mode === 'paused' && (e.code === 'Escape' || e.code === 'KeyP')) {
-    G.mode = 'playing';
-    showOverlay(null);
-  } else if (G.mode === 'shop' && e.code === 'Escape') { showOverlay(null); G.mode = 'playing'; }
-  else if (G.mode === 'title' && e.code === 'KeyS') showStats();
+
+// ===========================================================================
+// STAGE 3 — pause/settings plumbing, game-over flow, and the frame loop.
+// World systems only advance in mode 'playing'; overlays freeze the world
+// but never the rendering, so menus always sit over a live city.
+// ===========================================================================
+
+// --- small shape helpers ------------------------------------------------------
+// Vehicle/ped objects expose pos directly or through their mesh; accept both
+// so main never has to know which module built the object.
+function objPos(o) {
+  if (!o) return null;
+  if (o.pos) return o.pos;
+  if (o.mesh && o.mesh.position) return o.mesh.position;
+  if (o.position) return o.position;
+  return null;
+}
+function objAngle(o) {
+  if (!o) return 0;
+  if (typeof o.angle === 'number') return o.angle;
+  if (typeof o.heading === 'number') return o.heading;
+  if (o.mesh && o.mesh.rotation) return o.mesh.rotation.y;
+  return 0;
+}
+function dist2D(a, b) {
+  if (!a || !b) return Infinity;
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+  return Math.hypot(dx, dz);
+}
+
+// --- pause / settings / stats / quests / map / shop wiring ---------------------
+const btnResume = $('btnResume');
+if (btnResume) btnResume.addEventListener('click', () => resumeGame());
+
+const btnPauseSettings = $('btnPauseSettings');
+if (btnPauseSettings) btnPauseSettings.addEventListener('click', () => openSettings('pause'));
+
+const btnPauseStats = $('btnPauseStats');
+if (btnPauseStats) btnPauseStats.addEventListener('click', () => openStats('pause'));
+
+const btnSettingsBack = $('btnSettingsBack');
+if (btnSettingsBack) btnSettingsBack.addEventListener('click', () => backFromSettings());
+
+const btnStatsBack = $('btnStatsBack');
+if (btnStatsBack) btnStatsBack.addEventListener('click', () => backFromStats());
+
+const btnQuestClose = $('btnQuestClose');
+if (btnQuestClose) btnQuestClose.addEventListener('click', () => {
+  showOverlay(null);
+  G.mode = 'playing';
+  overlayReturn = null;
 });
-addEventListener('keyup', (e) => { G.keys[e.code] = false; });
-addEventListener('mousemove', (e) => {
-  if (G.mode !== 'playing') return;
-  if (e.buttons || document.pointerLockElement) orbitCamera(e.movementX || 0, e.movementY || 0);
+
+const btnQuitToTitle = $('btnQuitToTitle');
+if (btnQuitToTitle) btnQuitToTitle.addEventListener('click', () => {
+  G.mode = 'title';
+  setHudVisible(false);
+  hudVisible = false;
+  showOverlay('menu');
 });
-// Touch orbit: a touch drag on the canvas orbits the camera through the
-// exact same orbitCamera() the mouse uses — orbitCamera offsets
-// G.camYaw/G.camPitch and holds the auto-follow off briefly (dragHold), so
-// a manual orbit holds while the lead is still and the follow re-engages
-// as the lead turns, identical to the mouse. Mouse pointers are ignored
-// here (the mousemove handler above owns them). The joystick (#joy) and
-// the RUN/E/F/X buttons are separate DOM elements above the canvas, so
-// touches that start on them never fire canvas pointer events — no other
-// exclusion zones are needed.
-(function initTouchOrbit() {
-  const el = renderer.domElement;
-  let pid = null, lastX = 0, lastY = 0;
-  el.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch' || G.mode !== 'playing' || pid !== null) return;
-    pid = e.pointerId; lastX = e.clientX; lastY = e.clientY;
-    try { el.setPointerCapture(pid); } catch (err) { /* capture is best-effort */ }
+
+const btnMapClose = $('btnMapClose');
+if (btnMapClose) btnMapClose.addEventListener('click', () => closeMap());
+
+const btnMapReset = $('btnMapReset');
+if (btnMapReset) btnMapReset.addEventListener('click', () => { G.minimapZoom = 1; });
+
+const btnMapIn = $('btnMapIn');
+if (btnMapIn) btnMapIn.addEventListener('click', () => {
+  G.minimapZoom = Math.min(3, (G.minimapZoom || 1) + 1);
+});
+
+const btnMapOut = $('btnMapOut');
+if (btnMapOut) btnMapOut.addEventListener('click', () => {
+  G.minimapZoom = Math.max(1, (G.minimapZoom || 1) - 1);
+});
+
+const btnShopClose = $('btnShopClose');
+if (btnShopClose) btnShopClose.addEventListener('click', () => {
+  showOverlay(null);
+  if (G.mode !== 'title' && G.mode !== 'choice') G.mode = 'playing';
+});
+
+const btnEndingClose = $('btnEndingClose');
+if (btnEndingClose) btnEndingClose.addEventListener('click', () => {
+  // An ending closes back into free roam, not into a new run.
+  showOverlay(null);
+  G.mode = 'playing';
+});
+
+// Settings controls write straight into G.settings, then visuals re-apply.
+function parseSetting(raw) {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return raw;
+}
+function wireSetting(id, apply) {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('change', () => {
+    apply(el.value);
+    applyVisualSettings(appEl, renderer);
+    // Shadow cost follows quality, so keep the sun in sync with the setting.
+    sun.castShadow = G.settings.quality !== 'low';
   });
-  el.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== pid) return;
-    orbitCamera(e.clientX - lastX, e.clientY - lastY);
-    lastX = e.clientX; lastY = e.clientY;
-  });
-  const end = (e) => { if (e.pointerId === pid) pid = null; };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-})();
-renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
-addEventListener('mousedown', (e) => {
-  if (G.mode === 'playing' && e.target === renderer.domElement) {
-    if (e.button === 2) { if (G.weapon === 'Sniper') G.scoped = true; return; }
-    if (e.button === 0 && shoot(player.pos, scene)) { tutFlags.combat = true; onAction('shoot', player.pos); }
-  }
+}
+wireSetting('setSound', (v) => { G.settings.sound = parseSetting(v); });
+wireSetting('setFps', (v) => { G.settings.fps = parseInt(v, 10) || G.settings.fps; });
+wireSetting('setQuality', (v) => { G.settings.quality = v; });
+wireSetting('setBrightness', (v) => {
+  const n = parseFloat(v);
+  G.settings.brightness = Number.isFinite(n) ? n : G.settings.brightness;
 });
-addEventListener('mouseup', (e) => { if (e.button === 2) G.scoped = false; });
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-// Virtual joystick: ANALOG — it publishes a continuous vector on
-// G.joyVec and player.js reads direction + magnitude from it. (It used
-// to threshold the stick into WASD keys at 0.35, so a thumb hovering
-// near the threshold flickered A/D on and off and the walk veered
-// constantly.) Driving reads the SAME vector proportionally in
-// driving.js (stick Y = throttle, stick X = steering, per-axis
-// deadzone) — it must NOT be thresholded into keys any more: that
-// mapping was the "tilt a little, rocket off" bug, any forward tilt
-// became a held KeyW at full throttle. Buttons fire the same actions
-// as the keyboard, including the hold-to-sprint RUN button
-// (G.sprintTouch) and the driving-only hold-to-boost GAS button
-// (G.boostTouch).
-(function initJoystick() {
-  const base = $('joy'), knob = $('joyKnob');
-  let pid = null;
-  const setKeys = (dx, dy) => {
-    G.keys['KeyW'] = dy < -0.35; G.keys['KeyS'] = dy > 0.35;
-    G.keys['KeyA'] = dx < -0.35; G.keys['KeyD'] = dx > 0.35;
-  };
-  base.addEventListener('pointerdown', (e) => { pid = e.pointerId; base.setPointerCapture(pid); move(e); });
-  base.addEventListener('pointermove', (e) => { if (e.pointerId === pid) move(e); });
-  const end = () => { pid = null; knob.style.transform = 'translate(-50%,-50%)'; G.joyVec.x = 0; G.joyVec.y = 0; setKeys(0, 0); };
-  base.addEventListener('pointerup', end);
-  base.addEventListener('pointercancel', end);
-  function move(e) {
-    const r = base.getBoundingClientRect();
-    let dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2), dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
-    const l = Math.hypot(dx, dy);
-    if (l > 1) { dx /= l; dy /= l; }
-    knob.style.transform = 'translate(calc(-50% + ' + dx * 34 + 'px), calc(-50% + ' + dy * 34 + 'px))';
-    G.joyVec.x = dx; G.joyVec.y = dy;
-    // No setKeys() here: on foot player.js reads joyVec, and driving.js
-    // reads joyVec proportionally — neither wants binary keys any more.
-  }
-  $('joyRadio').onclick = () => { if (G.mode === 'playing') cycleRadio(); };
-  $('joyE').onclick = () => { if (G.mode === 'playing') doInteract(); };
-  $('joyF').onclick = () => { if (G.mode === 'playing') doPunch(); };
-  $('joyX').onclick = () => { if (G.mode === 'playing') useSelected(); };
-  const run = $('joyRun');
-  if (run) {
-    run.addEventListener('pointerdown', (e) => { e.preventDefault(); G.sprintTouch = true; });
-    run.addEventListener('pointerup', () => { G.sprintTouch = false; });
-    run.addEventListener('pointercancel', () => { G.sprintTouch = false; });
-    run.addEventListener('pointerleave', () => { G.sprintTouch = false; });
-  }
-  const gas = $('joyGas');
-  if (gas) {
-    gas.addEventListener('pointerdown', (e) => { e.preventDefault(); G.boostTouch = true; });
-    gas.addEventListener('pointerup', () => { G.boostTouch = false; });
-    gas.addEventListener('pointercancel', () => { G.boostTouch = false; });
-    gas.addEventListener('pointerleave', () => { G.boostTouch = false; });
-  }
-})();
+wireSetting('setJoystick', (v) => { G.settings.joystick = parseSetting(v); });
 
-// ---- Touch driving D-pad ------------------------------------------------------
-// While driving, enforceChrome hides the slide joystick and shows these
-// four buttons instead, all in ONE plus/D-pad cluster in the bottom-right
-// corner: ▲ throttle (top), ▼ brake/reverse (bottom), ◀ ▶ steer (middle
-// left/right), empty centre — so steer + throttle can be held together.
-// Each button publishes a held flag on G.driveTouch; driving.js turns the
-// pedals into the same proportional target-speed model as the analog stick
-// and RAMPS the steering. Multi-touch: every button tracks its own pointer
-// id, so buttons work independently. On-foot these stay hidden and the
-// joystick is untouched.
-(function initDrivePad() {
-  const bind = (id, key) => {
-    const b = $(id);
-    if (!b) return;
-    let pid = null;
-    b.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      pid = e.pointerId;
-      try { b.setPointerCapture(pid); } catch (err) { /* best-effort */ }
-      G.driveTouch[key] = true;
-      b.classList.add('held');
-    });
-    const end = (e) => {
-      if (pid !== null && e.pointerId !== pid) return;
-      pid = null;
-      G.driveTouch[key] = false;
-      b.classList.remove('held');
-    };
-    b.addEventListener('pointerup', end);
-    b.addEventListener('pointercancel', end);
-    b.addEventListener('lostpointercapture', end);
-  };
-  bind('padUp', 'up');
-  bind('padDown', 'down');
-  bind('padLeft', 'left');
-  bind('padRight', 'right');
-})();
+// --- fade blink (busted) ---------------------------------------------------------
+function fadeBlink() {
+  const fade = $('fadeEl');
+  if (!fade) return;
+  fade.style.transition = 'none';
+  fade.style.opacity = '1';
+  // Two nested timeouts: hold the black frame briefly, then fade back in.
+  setTimeout(() => {
+    fade.style.transition = 'opacity 0.6s ease';
+    fade.style.opacity = '0';
+  }, 350);
+}
 
-// ---- Per-frame collisions and pickups -----------------------------------------
-let pedCooldown = 0;
-function footCollisions(dt) {
-  pedCooldown -= dt;
-  if (pedCooldown > 0) return;
-  for (const p of peds) {
-    if (p.down <= 0 && p.mesh.position.distanceTo(player.pos) < 1.1 && player.speedNow > 9) {
-      p.down = 2;
-      pedCooldown = 1;
-      commitCrime(Math.max(1, G.wanted), 'Pedestrian hit');
-      G.health = Math.max(1, G.health - 2);
+// --- game over ---------------------------------------------------------------------
+function gameOver(kind) {
+  if (kind === 'busted') {
+    G.stats.busted++;
+    fadeBlink();
+    showBanner('BUSTED', 2.5);
+    G.wanted = 0;
+    G.bust = 0;
+    G.health = 100;
+    G.scoped = false;
+    if (G.driving) {
+      // Silent exit: no placement here, prison decides where the player is.
+      try { exitVehicle(); } catch (e) { G.driving = null; }
+      G.driving = null;
+      if (player.mesh) player.mesh.visible = true;
     }
+    sendToPrison();
+    return;
   }
-}
-function driveCollisions() {
-  vehicleHitCheck(() => {
-    sfx.crash();
-    commitCrime(Math.max(1, G.wanted), 'Vehicle collision');
-    G.health = Math.max(1, G.health - 4);
-  });
-  if (G.driving && Math.abs(G.driving.speed) > 4) {
-    for (const p of peds) {
-      if (p.down <= 0 && p.mesh.position.distanceTo(G.driving.pos) < 2.2) {
-        p.down = 4;
-        commitCrime(Math.max(2, G.wanted), 'Pedestrian run down');
-        sfx.crash();
-      }
+  if (kind === 'wasted') {
+    G.stats.wasted++;
+    showBanner('WASTED', 2.5);
+    // The hospital takes its cut: 10% of carried money, never below zero.
+    G.money = Math.max(0, G.money - Math.floor(G.money * 0.1));
+    G.health = 100;
+    G.wanted = 0;
+    G.bust = 0;
+    G.scoped = false;
+    if (G.driving) {
+      try { exitVehicle(); } catch (e) { G.driving = null; }
+      G.driving = null;
+      if (player.mesh) player.mesh.visible = true;
     }
-  }
-}
-function checkPickups() {
-  if (G.driving || G.interior) return;
-  for (const pk of city.pickups) {
-    if (pk.taken) continue;
-    if (Math.hypot(player.pos.x - pk.x, player.pos.z - pk.z) < 2.4) {
-      if (addItem(pk.kind)) {
-        pk.taken = true;
-        pk.grp.visible = false;
-        if (pk.kind === 'sniper') {
-          G.sniperAmmo += 24;
-          showDialogue('Cache', 'Sniper Rifle found — 24 rounds. Select its slot, hold right-mouse or V to scope.', 5);
-        } else showDialogue('Pickup', ITEM_DEFS[pk.kind].name + ' added to your hotbar.', 3);
-        sfx.pickup();
-        saveGame();
-      } else G.prompt = 'Inventory full — use or drop something first (slots 1–5, X uses).';
-    }
+    G.interior = null;
+    placeAt(HOSPITAL_POS.x, HOSPITAL_POS.z - 14, 0);
   }
 }
 
-// ---- The frame loop --------------------------------------------------------------
-let last = performance.now(), titleAngle = 0, fpsCount = 0, fpsTime = 0, prevHealth = 100, renderAcc = 0, clubModeOn = false;
-window.__fps = 0;
-function frame(now) {
-  requestAnimationFrame(frame);
-  let rawDt = Math.min(0.15, (now - last) / 1000);
-  last = now;
-  if (rawDt <= 0) rawDt = 0.016;
-  renderAcc += rawDt;
-  const minStep = settings.fpsCap === 30 ? 1 / 30.5 : 0;
-  if (renderAcc < minStep) return;
-  const dt = renderAcc;
-  renderAcc = 0;
+// --- endings -------------------------------------------------------------------------
+function finishEnding(id) {
+  const e = ENDINGS[id];
+  if (!e) return;
+  G.mode = 'ending';
+  const found = Array.isArray(G.endingsFound) ? G.endingsFound.length : 0;
+  showEnding(
+    e.name,
+    e.text,
+    'Endings found ' + found + ' of 6 · Earned $' + G.stats.earned + ' · Busted ×' + G.stats.busted,
+  );
+}
+
+// --- vehicle enter / exit ----------------------------------------------------------------
+// Order inside a frame is fixed by the loop; this helper only does the swap.
+function handleVehicleQueue() {
+  if (G.driving) {
+    const exitPos = exitVehicle();
+    G.driving = null;
+    if (exitPos) placeAt(exitPos.x, exitPos.z, player.angle);
+    if (player.mesh) player.mesh.visible = true;
+    return;
+  }
+  // Jacking a cop car is its own crime path: tryJackCop already applied the
+  // wanted level, so enterVehicle (which would add another) is bypassed.
+  const cop = tryJackCop(player.pos);
+  if (cop) {
+    const v = adoptVehicle(cop);
+    if (v) {
+      v.driver = 'player';
+      G.driving = v;
+      if (player.mesh) player.mesh.visible = false;
+    }
+    return;
+  }
+  const v = nearestVehicle(player.pos, 3.4);
+  if (v) {
+    enterVehicle(v, player.pos);
+    if (G.driving && player.mesh) player.mesh.visible = false;
+  }
+}
+
+// --- per-frame world update (playing only) ----------------------------------------------
+function updateWorld(dt) {
   G.time += dt;
-  fpsCount++; fpsTime += rawDt;
-  if (fpsTime >= 0.5) { window.__fps = Math.round(fpsCount / fpsTime); fpsCount = 0; fpsTime = 0; }
-  city.diamond.rotation.y += dt * 2;
-  city.diamond.position.y = 6 + Math.sin(G.time * 3) * 0.5;
-  city.ocean.position.y = -0.35 + Math.sin(G.time * 0.8) * 0.06;
-  updateLights(G.time);
-  window.__playerPos = player.pos;
-  const targetFov = G.scoped && G.weapon === 'Sniper' ? 20 : 62;
-  if (Math.abs(camera.fov - targetFov) > 0.2) {
-    camera.fov += (targetFov - camera.fov) * 0.35;
-    camera.updateProjectionMatrix();
-  }
-  $('scope').style.display = G.scoped && G.weapon === 'Sniper' && G.mode === 'playing' ? 'block' : 'none';
-  enforceChrome();
-  // Club mode: inside CLUB NEON PALMS the radio is the club's music.
-  const inClub = G.interior === 'club';
-  if (inClub !== clubModeOn) { clubModeOn = inClub; radio.setClubMode(inClub); }
 
-  if (G.mode === 'title' || (G.mode === 'stats' && G.prevMode === 'title')) {
-    titleAngle += dt * 0.07;
-    if (window.__titleCam) { camera.position.set(...window.__titleCam.pos); camera.lookAt(...window.__titleCam.look); }
-    else {
-      camera.position.set(Math.cos(titleAngle) * 55, 26, 58 + Math.sin(titleAngle) * 55);
-      camera.lookAt(0, 4, 58);
+  // Capture and clear the edge queues exactly once, before any consumer runs.
+  const attackPressed = attackPressQueued;
+  attackPressQueued = false;
+  const ctx = {
+    interactPressed: interactQueued,
+    playerPos: player.pos,
+    driving: G.driving,
+    attackPressed,
+    attackHeld: attackHeldNow(),
+  };
+  interactQueued = false;
+  const wantVehicle = vehicleQueued;
+  vehicleQueued = false;
+
+  // (1) Prison runs first: release changes where the player stands this frame.
+  const prisonEvent = updatePrison(dt, ctx);
+  if (prisonEvent === 'bailed') showBanner('Bailed out', 2.5);
+  else if (prisonEvent === 'served') showBanner('Sentence served', 2.5);
+
+  // (2) Movement: exactly one of driving / on-foot drives the lead each frame.
+  if (G.driving) updateDriving(dt, computeDriveInput());
+  else updatePlayer(dt, computeWish());
+  updatePartner(dt);
+
+  // (3) Vehicle enter/exit, after movement so positions are current.
+  if (wantVehicle) handleVehicleQueue();
+  if (G.driving !== lastDriving) syncTouchControls();
+
+  // (4) Traffic around the player.
+  updateTraffic(dt, player.pos);
+
+  // (5) Pedestrians flee only from a wanted or fast-moving player.
+  const drivingFast = G.driving && Math.abs(G.driving.speed || 0) > 12;
+  const danger = (G.wanted > 0 || drivingFast) ? player.pos : null;
+  updatePeds(dt, danger);
+
+  // (6) Vehicle-vs-pedestrian hits: cooldown per ped stops multi-counting.
+  if (G.driving && Math.abs(G.driving.speed || 0) > 6) {
+    const vPos = objPos(G.driving) || player.pos;
+    const speed = Math.abs(G.driving.speed || 0);
+    for (const ped of peds) {
+      const pPos = objPos(ped);
+      if (!pPos || dist2D(vPos, pPos) > 1.7) continue;
+      if (G.time - (ped.hurtAt || 0) <= 2) continue;
+      hurtPed(ped, 40, vPos);
+      ped.hurtAt = G.time;
+      if (speed > 14) commitCrime(2, 'Pedestrian run down', { pos: pPos });
+      else commitCrime(1, 'Pedestrian hit', { pos: pPos });
     }
-    updateTraffic(dt, player.pos);
-    updatePeds(dt, null, 0);
-  } else if (G.mode === 'playing' || G.mode === 'over') {
-    if (G.mode === 'over') { G.overTimer -= dt; if (G.overTimer <= 0) G.mode = 'playing'; }
-    prevHealth = G.health;
-    const speedNow = G.driving ? G.driving.speed : player.speedNow;
-    const waking = updateWake(dt);
-    if (waking) {
-      updateCamera(dt, camera, player.pos, 7); // the camera watches the rise
-    } else if (G.driving) {
-      updateDriving(dt, camera, null);
-      driveCollisions();
-    } else {
-      updatePlayer(dt, camera);
-      footCollisions(dt);
-    }
-    updateTutorial();
-    if (G.interior) {
-      // Inside a room the street systems pause; the room owns the prompt.
-      G.prompt = updateInteriors(dt, player.pos, showDialogue);
-      updateTraffic(dt, player.pos);
-      updatePeds(dt, null, 0);
-    } else {
-      const prisonMsg = updatePrison(dt, player.pos, showDialogue);
-      updateTraffic(dt, player.pos);
-      const danger = G.wanted > 0 || (G.driving && Math.abs(G.driving.speed) > 12) ? player.pos : null;
-      updatePeds(dt, danger, 9);
-      updateMissions(dt, player.pos);
-      updatePolice(dt, player.pos, speedNow, () => gameOver('busted'));
-      updateFire(dt, player.pos);
-      checkPickups();
-      if (G.health <= 0) gameOver('wasted');
-      if (G.health < prevHealth && G.armour > 0 && G.mode === 'playing') {
-        const absorbed = Math.min(G.armour, (prevHealth - G.health) * 0.6);
-        G.health += absorbed;
-        G.armour -= absorbed;
-      }
-      if (G.wanted === 0 && G.health < 100 && G.inPrison <= 0) G.health = Math.min(100, G.health + dt * 2);
-      G.district = landmarkAt(player.pos.x, player.pos.z) || districtAt(player.pos.x, player.pos.z);
-      if (prisonMsg) G.prompt = prisonMsg;
-      else if (!G.driving) {
-        const ent = nearestInterior(player.pos);
-        const fac = nearestFacility(player.pos);
-        const jk = nearestJackable();
-        const car = nearestStealable();
-        G.prompt = ent ? 'Press E to enter ' + ent.name
-          : fac ? 'Press E to enter ' + fac.name
-          : jk ? 'Press E to carjack the ' + jk.name
-          : car ? 'Press E to steal the ' + car.name : '';
-      } else G.prompt = sidePrompt(player.pos) || 'Press E to exit · R race (Marina Mile) · T taxi fare';
-    }
-    updateHud(player.pos, missionTarget(), policePositions());
   }
+
+  // (7) Police chase the thing that is actually moving: car or lead.
+  const target = G.driving || player;
+  const targetPos = G.driving ? (objPos(G.driving) || player.pos) : player.pos;
+  const targetSpeed = G.driving ? (G.driving.speed || 0) : (player.speedNow || 0);
+  void target;
+  updatePolice(dt, targetPos, targetSpeed, () => gameOver('busted'));
+
+  // (8) Combat, (9) fire: both read the live player position.
+  updateCombat(dt, { attackPressed, attackHeld: ctx.attackHeld });
+  updateFire(dt, player.pos);
+
+  // (10) Facilities (doors, interiors, shops), then (11) missions/story.
+  updateFacilities(dt, ctx);
+  const ev = updateMissions(dt, ctx);
+  if (typeof ev === 'string' && ev.startsWith('ending:')) finishEnding(ev.slice(7));
+
+  // (12) Pickups get whatever interact press is left in ctx.
+  const got = updatePickups(dt, player.pos, ctx.interactPressed);
+  if (got) {
+    showBanner('Picked up ' + got, 1.6);
+    try { sfx.pickup(); } catch (e) { /* sfx optional */ }
+  }
+
+  // (13) Radio keeps playing under everything else.
+  try { radio.update(); } catch (e) { /* radio optional */ }
+
+  // (14) Quiet regen only when nobody is looking for the player.
+  if (G.wanted === 0 && !G.inPrison && G.health < 100) {
+    G.health = Math.min(100, G.health + 2 * dt);
+  }
+  if (G.health <= 0) { gameOver('wasted'); return; }
+
+  // (15) Autosave once a minute; interiors save their world door instead,
+  // because an interior position means nothing once the scene reloads.
+  autosaveClock += dt;
+  if (autosaveClock >= 60) {
+    autosaveClock = 0;
+    try { saveGame(G.interior ? HOME_DOOR : player.pos); } catch (e) { /* save optional */ }
+  }
+
+  // (16) Ambient city motion last, so it never feeds back into gameplay.
+  updateCity(dt, G.time);
+}
+
+// --- camera focus ---------------------------------------------------------------------------
+function updateFrameCamera(dt) {
+  const mode = G.mode;
+  const titleLike = mode === 'title' || mode === 'choice'
+    || ((mode === 'settings' || mode === 'stats') && settingsReturn === 'menu' && statsReturn === 'menu');
+  if (titleLike) {
+    // Slow orbit: the menu shows the living city, not a static backdrop.
+    titleAngle += dt * 0.05;
+    camera.position.set(Math.sin(titleAngle) * 120, 40, Math.cos(titleAngle) * 120);
+    camera.lookAt(0, 4, 0);
+    return;
+  }
+  if (!player || !player.pos) return;
+  if (G.driving) {
+    const vPos = objPos(G.driving) || player.pos;
+    updateCamera(dt, camera, vPos, objAngle(G.driving), true);
+  } else {
+    updateCamera(dt, camera, player.pos, player.angle || 0, false);
+  }
+}
+
+// --- resize -------------------------------------------------------------------------------------
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- main loop ------------------------------------------------------------------------------------
+// frameInterval may report seconds or milliseconds depending on settings;
+// normalise once per frame by magnitude instead of assuming a unit.
+function frameIntervalSeconds() {
+  let iv = 0;
+  try { iv = frameInterval(); } catch (e) { iv = 0; }
+  if (!iv || !Number.isFinite(iv) || iv <= 0) return 0;
+  return iv > 1 ? iv / 1000 : iv;
+}
+
+let lastFrameStamp = 0;
+function frame(nowMs) {
+  requestAnimationFrame(frame);
+  const now = nowMs || performance.now();
+  if (!lastFrameStamp) lastFrameStamp = now;
+  const elapsed = (now - lastFrameStamp) / 1000;
+  const minInterval = frameIntervalSeconds();
+  // Frame cap: skip this cadence entirely; elapsed keeps accumulating
+  // because lastFrameStamp is only advanced on a rendered frame.
+  if (minInterval > 0 && elapsed < minInterval) return;
+  lastFrameStamp = now;
+  const dt = Math.min(elapsed, 0.05);
+
+  if (G.mode === 'playing') updateWorld(dt);
+  updateFrameCamera(dt);
+  if (hudVisible) updateHud(dt);
   renderer.render(scene, camera);
 }
-
-window.__game = {
-  G, player, startPlaying, renderer, scene, camera, cops, officers, parkedCars, trafficCars, peds,
-  commitCrime, nearestJackable, carjack,
-  fireState, forceIgnite, computeEnding, settings, radio,
-  seedEnding: (patch) => { Object.assign(G.track, patch || {}); },
-  finishFinale, gameOver,
-  selectSlot: doSelectSlot, useSelected, addItem, buyItem, FACILITIES, replayFinale, payBail,
-  // Stage-2 verification surface: world scale, density, animation, camera,
-  // interiors, tutorial and quest log — all readable from a test harness.
-  buildingCounts, worldLength, NORTH_END, strideState,
-  ENTERABLES, enterInteriorById: (id) => {
-    const e = ENTERABLES.find((x) => x.id === id);
-    return e ? enterInterior(e, player.pos) : null;
-  },
-  questLogData, setTrackedQuest, getTrackedQuest,
-  mapView: () => ({ view: getFullMapView(), factor: fullMapZoomFactor() }),
-  zoomFullMap: (f) => { zoomFullMap(f); drawFullMap(); },
-  resetFullMapView: () => { resetFullMapView(); drawFullMap(); },
-  tutorial: () => ({ step: tutStep, done: tutDone }),
-  teleport: (x, z) => { player.pos.set(x, 0.3, z); if (G.driving) G.driving.pos.set(x, 0, z); },
-};
-stageShot(shot, () => startPlaying(false));
-if (window.__shotOverlay) showOverlay(window.__shotOverlay);
-if (shot === 'map') setTimeout(drawFullMap, 350);
-if (shot) {
-  setTimeout(() => { window.__shotReady = true; }, 600);
-}
-refreshSaveInfo();
 requestAnimationFrame(frame);

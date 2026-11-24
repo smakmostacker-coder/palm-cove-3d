@@ -280,8 +280,15 @@ export function updatePlayer(dt, wish) {
   }
   collideWorld(player.pos, 0.55);
   // Bound after collision, so neither system can leave the avatar outside.
-  player.pos.x = clamp(player.pos.x, -BOUND_X, BOUND_X);
-  player.pos.z = clamp(player.pos.z, BOUND_Z_MIN, BOUND_Z_MAX);
+  // Interiors live far off-map by design, so the outdoor bound must not
+  // apply indoors: facilities clamp the avatar to the room rect instead.
+  // (Applying it indoors dragged the avatar to the bound corner every
+  // frame and the room clamp then pinned it to the room's min corner,
+  // frozen — no interior could ever be walked in.)
+  if (!G.interior) {
+    player.pos.x = clamp(player.pos.x, -BOUND_X, BOUND_X);
+    player.pos.z = clamp(player.pos.z, BOUND_Z_MIN, BOUND_Z_MAX);
+  }
   // Swim decision: only outdoors, only off land, and only where the floor
   // query reports open water (0) rather than a deck or the seabed.
   const fh = floorHeight(player.pos.x, player.pos.z, player.pos.y);

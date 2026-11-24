@@ -245,7 +245,9 @@ const shotApi = {
 };
 
 function enterNearestCar() {
-  const v = nearestVehicle(player.pos, 6);
+  // Staging-only helper: parked cars jitter up to 6 units from their
+  // nominal spots, so the search radius must clear that plus a margin.
+  const v = nearestVehicle(player.pos, 10);
   if (!v) return false;
   enterVehicle(v, player.pos);
   if (player.mesh) player.mesh.visible = false;
@@ -435,10 +437,10 @@ bindTap($('btnEnter'), () => { vehicleQueued = true; });
 bindTap($('btnRadio'), () => { try { radio.toggle(); } catch (err) { /* optional */ } });
 bindTap($('btnPause'), () => { if (G.mode === 'playing') pauseGame(); });
 bindTap($('btnQuests'), () => { if (G.mode === 'playing') openQuests(); });
-bindTap($('btnZoom'), () => {
-  // Minimap zoom cycles through three ranges; hud reads G.minimapZoom.
-  G.minimapZoom = G.minimapZoom >= 3 ? 1 : (G.minimapZoom || 1) + 1;
-});
+// Minimap zoom is owned by hud.js: its btnZoom click handler cycles
+// G.minimapZoom through the NEAR/MID/FAR strings hud's drawMinimap reads.
+// A second writer here (numeric 1..3) corrupted that string state and
+// wedged the cycle, so main deliberately does not bind btnZoom.
 
 // A real click on the minimap opens the full map (drags are for the camera).
 const minimapEl = $('minimap');
@@ -609,21 +611,11 @@ if (btnQuitToTitle) btnQuitToTitle.addEventListener('click', () => {
   showOverlay('menu');
 });
 
-const btnMapClose = $('btnMapClose');
-if (btnMapClose) btnMapClose.addEventListener('click', () => closeMap());
-
-const btnMapReset = $('btnMapReset');
-if (btnMapReset) btnMapReset.addEventListener('click', () => { G.minimapZoom = 1; });
-
-const btnMapIn = $('btnMapIn');
-if (btnMapIn) btnMapIn.addEventListener('click', () => {
-  G.minimapZoom = Math.min(3, (G.minimapZoom || 1) + 1);
-});
-
-const btnMapOut = $('btnMapOut');
-if (btnMapOut) btnMapOut.addEventListener('click', () => {
-  G.minimapZoom = Math.max(1, (G.minimapZoom || 1) - 1);
-});
+// The full-map buttons (btnMapClose / btnMapReset / btnMapIn / btnMapOut)
+// are wired once in hud.js initHud(), where they drive the map view
+// (mapView.scale and resetMapView). Duplicate listeners here wrote numeric
+// values into G.minimapZoom — a minimap-only string state — corrupting the
+// minimap zoom label and range, so main leaves these buttons to hud.
 
 const btnShopClose = $('btnShopClose');
 if (btnShopClose) btnShopClose.addEventListener('click', () => {

@@ -41,12 +41,20 @@ export function applyShotStaging(search, api) {
 
       case 'drive':
         callApi(api, 'startGame', ['vera']);
-        callApi(api, 'teleport', [60, 30, 0]);
+        // startGame wakes the lead inside the home interior, and the
+        // facilities system clamps the player into that room while
+        // G.interior is set — a bare teleport outdoors is pulled back
+        // into the room on the next frame. Staging outdoors must clear
+        // the interior flag, exactly as leaving through the door does.
+        if (api && api.G) api.G.interior = null;
+        callApi(api, 'teleport', [40, 13, 0]);
         callApi(api, 'enterNearestCar', []);
         return true;
 
       case 'chase':
         callApi(api, 'startGame', ['vera']);
+        // Same interior clamp as 'drive': clear it before teleporting.
+        if (api && api.G) api.G.interior = null;
         callApi(api, 'teleport', [30, 10, 0]);
         callApi(api, 'setWanted', [4]);
         return true;

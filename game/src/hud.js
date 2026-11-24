@@ -249,7 +249,11 @@ function traceLand(ctx, project) {
   ctx.closePath();
 }
 function paintBase(ctx, w, h, project) {
-  ctx.fillStyle = '#0b3d66';
+  // Water: a two-stop gradient so the sea has depth, not one flat fill.
+  const sea = ctx.createLinearGradient(0, 0, 0, h);
+  sea.addColorStop(0, '#11608c');
+  sea.addColorStop(1, '#082f4d');
+  ctx.fillStyle = sea;
   ctx.fillRect(0, 0, w, h);
   // Sand pass first, slightly fat, so the coast reads as a beach rim.
   traceLand(ctx, project);
@@ -263,15 +267,59 @@ function paintBase(ctx, w, h, project) {
   ctx.fillStyle = '#3f9e4d';
   ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = 'rgba(245, 240, 210, 0.85)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (const [x1, z1, x2, z2] of MAP_DATA.roads || []) {
-    const a = project(x1, z1);
-    const b = project(x2, z2);
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+  // District tints, clipped to the land so they never spill into the sea:
+  // the city reads warm and urban, the glades band darker green, and each
+  // town sits on a pale settled patch.
+  ctx.save();
+  traceLand(ctx, project);
+  ctx.clip();
+  const cityA = project(-190, -190);
+  const cityB = project(190, 190);
+  ctx.fillStyle = 'rgba(216, 198, 152, 0.40)';
+  ctx.fillRect(cityA.x, cityA.y, cityB.x - cityA.x, cityB.y - cityA.y);
+  const glA = project(-260, -4400);
+  const glB = project(260, -760);
+  ctx.fillStyle = 'rgba(16, 62, 28, 0.30)';
+  ctx.fillRect(glA.x, glA.y, glB.x - glA.x, glB.y - glA.y);
+  ctx.fillStyle = 'rgba(232, 214, 164, 0.34)';
+  const townR = Math.abs(project(95, 0).x - project(0, 0).x);
+  for (const town of MAP_DATA.towns || TOWNS) {
+    const p = project(town.x || 0, town.z);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, townR, 0, Math.PI * 2);
+    ctx.fill();
   }
+  ctx.restore();
+  // Roads in two passes — a dark asphalt casing under a pale core — so the
+  // network reads as streets rather than scratches on the grass.
+  const roads = MAP_DATA.roads || [];
+  ctx.lineCap = 'round';
+  for (const pass of [[3.4, 'rgba(26, 26, 32, 0.9)'], [1.5, 'rgba(246, 241, 216, 0.95)']]) {
+    ctx.strokeStyle = pass[1];
+    ctx.lineWidth = pass[0];
+    ctx.beginPath();
+    for (const [x1, z1, x2, z2] of roads) {
+      const a = project(x1, z1);
+      const b = project(x2, z2);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
+  }
+  // Trunk routes on top with a gold core: the highway/causeway spine and
+  // Palm Boulevard, so the island's main axis shows at a glance.
+  const hw = MAP_DATA.highway || { x: 0, to: -4400 };
+  ctx.strokeStyle = 'rgba(255, 190, 60, 0.95)';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  let a = project(hw.x, 430);
+  let b = project(hw.x, hw.to);
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  a = project(-190, 0);
+  b = project(190, 0);
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
   ctx.stroke();
 }
 // Tip from the facing vector directly, so the arrow cannot end up a
@@ -319,7 +367,7 @@ export function drawMinimap() {
     y: h / 2 + (z - centreZ) * scale,
   });
   paintBase(ctx, w, h, project);
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = '#ffd23f';
   for (const f of FACILITIES) {
     const p = project(f.x, f.z);
     if (p.x < -4 || p.x > w + 4 || p.y < -4 || p.y > h + 4) continue;
@@ -333,6 +381,11 @@ export function drawMinimap() {
       const p = project(town.x || 0, town.z);
       if (p.x < 0 || p.x > w || p.y < 0 || p.y > h) continue;
       ctx.fillText(town.name, p.x, p.y);
+    }
+    const pc = project(0, -16);
+    if (pc.x > 0 && pc.x < w && pc.y > 0 && pc.y < h) {
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText('PALM COVE', pc.x, pc.y);
     }
   }
   if (!facility) {
@@ -441,6 +494,12 @@ export function drawMap() {
     const p = project(town.x || 0, town.z);
     if (p.x < 0 || p.x > w || p.y < 0 || p.y > h) continue;
     ctx.fillText(town.name, p.x, p.y);
+  }
+  const pc = project(0, -18);
+  if (pc.x > 0 && pc.x < w && pc.y > 0 && pc.y < h) {
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText('PALM COVE', pc.x, pc.y);
   }
   const prison = MAP_DATA.prison;
   if (prison) {

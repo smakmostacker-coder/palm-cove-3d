@@ -91,6 +91,13 @@ registerRooms();
 export function interiorSpot(id) {
   const room = rooms.get(id);
   if (!room) return { x: ROOM_BASE_X, z: ROOM_BASE_Z, bedX: ROOM_BASE_X, bedZ: ROOM_BASE_Z };
+  // Every entry path (new-game wake-up, door entry) funnels through here,
+  // so publish the room rect for the camera to clamp against while indoors.
+  G.interiorRect = {
+    minX: room.cx - room.w / 2, maxX: room.cx + room.w / 2,
+    minZ: room.cz - room.d / 2, maxZ: room.cz + room.d / 2,
+    ceilY: WALL_H,
+  };
   return { x: room.spawnX, z: room.spawnZ, bedX: room.bedX, bedZ: room.bedZ };
 }
 

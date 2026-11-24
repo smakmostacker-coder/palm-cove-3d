@@ -18,6 +18,7 @@ export const G = {
   // Situation: what the player is currently inside of, if anything.
   driving: null, // current vehicle object while driving
   interior: null, // current interior id while indoors
+  interiorRect: null, // {minX,maxX,minZ,maxZ,ceilY} of the current room; the camera clamps inside it
   swimming: false,
   inPrison: 0,
   scoped: false, // aiming through a scope

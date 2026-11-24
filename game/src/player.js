@@ -344,11 +344,49 @@ export function updateCamera(dt, camera, focusPos, focusAngle, driving) {
   // keeps the transition from popping when entering a vehicle.
   const desiredDist = driving ? 11 : cam.dist;
   camState.distNow += (desiredDist - camState.distNow) * dampFactor(4, dt);
-  const dist = camState.distNow;
+  // Indoors the orbit distance has to shrink to room scale and the camera
+  // must stay inside the room rect: at the outdoor distance it parks
+  // outside the walls, above the ceiling slab, and the player just sees
+  // that slab's top face filling the screen with the avatar hidden under it.
+  const room = G.interior ? G.interiorRect : null;
+  const dist = room ? Math.min(camState.distNow, 3.4) : camState.distNow;
   const cosP = Math.cos(cam.pitch);
-  const desiredX = focusPos.x + Math.sin(cam.yaw) * cosP * dist;
-  const desiredY = focusPos.y + 1.6 + Math.sin(cam.pitch) * dist;
-  const desiredZ = focusPos.z + Math.cos(cam.yaw) * cosP * dist;
+  let desiredX = focusPos.x + Math.sin(cam.yaw) * cosP * dist;
+  let desiredY = focusPos.y + 1.6 + Math.sin(cam.pitch) * dist;
+  let desiredZ = focusPos.z + Math.cos(cam.yaw) * cosP * dist;
+  if (room) {
+    // The plain clamp is not enough near a wall: the spawn bed sits against
+    // the north wall, so "behind the player" clamps to ~1.2 units away and
+    // the view is the back of her head filling the screen. When the clamped
+    // offset comes out too close, swing the camera a quarter turn at a time
+    // until it fits, and keep the winning offset until it stops fitting so
+    // the view never spins while walking a room.
+    const fits = (off) => {
+      const sy = cam.yaw + off;
+      const px = clamp(focusPos.x + Math.sin(sy) * cosP * dist, room.minX + 0.45, room.maxX - 0.45);
+      const pz = clamp(focusPos.z + Math.cos(sy) * cosP * dist, room.minZ + 0.45, room.maxZ - 0.45);
+      return Math.hypot(px - focusPos.x, pz - focusPos.z);
+    };
+    if (typeof camState.roomOff !== 'number') camState.roomOff = 0;
+    if (fits(camState.roomOff) < 2.2) {
+      let best = camState.roomOff;
+      let bestD = fits(camState.roomOff);
+      for (const off of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+        const d = fits(off);
+        if (d > bestD) { bestD = d; best = off; }
+        if (d >= 2.6) { best = off; break; }
+      }
+      camState.roomOff = best;
+    }
+    const sy = cam.yaw + camState.roomOff;
+    desiredX = focusPos.x + Math.sin(sy) * cosP * dist;
+    desiredZ = focusPos.z + Math.cos(sy) * cosP * dist;
+    desiredX = clamp(desiredX, room.minX + 0.45, room.maxX - 0.45);
+    desiredZ = clamp(desiredZ, room.minZ + 0.45, room.maxZ - 0.45);
+    desiredY = clamp(desiredY, 0.5, room.ceilY - 0.25);
+  } else {
+    camState.roomOff = 0;
+  }
   const lookTX = focusPos.x;
   const lookTY = focusPos.y + 1.6;
   const lookTZ = focusPos.z;

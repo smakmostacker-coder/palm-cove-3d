@@ -504,7 +504,7 @@ const TUT_STEPS = [
   { d: 'Interact — E at doors, shops and cars. Head out of the house', t: 'Interact — tap E at doors, shops and cars. Head out of the house', done: () => tutFlags.interacted },
   { d: 'Hotbar — press 1–5 to select a slot, X uses an item', t: 'Hotbar — tap a slot to select it, X uses an item', done: () => tutFlags.slot },
   { d: 'Steal a vehicle — walk to a car and press E', t: 'Steal a vehicle — walk to a car and tap E', done: () => !!G.driving },
-  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — ▲ throttle, ◀ ▶ steer · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
+  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — one D-pad cluster (bottom-right): ▲ throttle · ▼ brake/reverse · ◀ ▶ steer · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
   { d: 'Fight — F punches · mouse click fires an equipped weapon', t: 'Fight — F punches · the fire button shoots an equipped weapon', done: () => tutFlags.combat },
 ];
 function updateTutorial() {
@@ -675,12 +675,13 @@ addEventListener('resize', () => {
 
 // ---- Touch driving D-pad ------------------------------------------------------
 // While driving, enforceChrome hides the slide joystick and shows these
-// four buttons instead: ▲ throttle, ▼ brake/reverse (right thumb), ◀ ▶
-// steer (left thumb) — positioned so steer + throttle can be held together.
+// four buttons instead, all in ONE plus/D-pad cluster in the bottom-right
+// corner: ▲ throttle (top), ▼ brake/reverse (bottom), ◀ ▶ steer (middle
+// left/right), empty centre — so steer + throttle can be held together.
 // Each button publishes a held flag on G.driveTouch; driving.js turns the
 // pedals into the same proportional target-speed model as the analog stick
 // and RAMPS the steering. Multi-touch: every button tracks its own pointer
-// id, so two thumbs work independently. On-foot these stay hidden and the
+// id, so buttons work independently. On-foot these stay hidden and the
 // joystick is untouched.
 (function initDrivePad() {
   const bind = (id, key) => {

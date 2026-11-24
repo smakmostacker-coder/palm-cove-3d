@@ -81,11 +81,15 @@
   #joyBtns { position:fixed; right:26px; bottom:220px; display:none; flex-direction:column; gap:10px; z-index:8; }
   #joyBtns button { width:58px; height:58px; border-radius:50%; padding:0; font-size:15px; }
   /* Driving D-pad (touch only, shown instead of the joystick while driving):
-     steering cluster bottom-left, throttle/brake cluster bottom-right, so
-     both thumbs can hold steer + throttle together. GAS stays in #joyBtns. */
+     single plus/D-pad cluster bottom-right — all four drive buttons in one
+     place (▲ top, ◀ ▶ middle, ▼ bottom, empty centre), so one thumb can
+     hold steer + throttle together. GAS stays in #joyBtns, above the cluster. */
   #dpad { position:fixed; inset:auto 0 0 0; display:none; z-index:8; pointer-events:none; }
-  #dpadSteer { position:absolute; left:18px; bottom:96px; display:flex; gap:14px; pointer-events:none; }
-  #dpadPedals { position:absolute; right:18px; bottom:96px; display:flex; gap:14px; pointer-events:none; }
+  #dpadCluster { position:absolute; right:18px; bottom:96px; width:244px; height:244px; pointer-events:none; }
+  #padUp { position:absolute; left:84px; top:0; }
+  #padLeft { position:absolute; left:0; top:84px; }
+  #padRight { position:absolute; left:168px; top:84px; }
+  #padDown { position:absolute; left:84px; top:168px; }
   #dpad button { pointer-events:auto; width:76px; height:76px; border-radius:50%; padding:0; margin:0; font-size:30px; background:rgba(255,211,42,.88); color:#1e272e; border:2px solid rgba(255,255,255,.6); touch-action:none; user-select:none; -webkit-user-select:none; }
   #dpad button.held { background:#fff; transform:scale(1.08); }
   #fullmap { touch-action:none; }
@@ -118,7 +122,7 @@
 </div>
 <div id="tutBox" class="panel"><span id="tutText"></span><button id="btnTutSkip">Skip tutorial</button></div>
 <div id="joy"><div id="joyKnob"></div></div>
-<div id="dpad"><div id="dpadSteer"><button id="padLeft" aria-label="Steer left">◀</button><button id="padRight" aria-label="Steer right">▶</button></div><div id="dpadPedals"><button id="padDown" aria-label="Brake and reverse">▼</button><button id="padUp" aria-label="Throttle">▲</button></div></div>
+<div id="dpad"><div id="dpadCluster"><button id="padUp" aria-label="Throttle">▲</button><button id="padLeft" aria-label="Steer left">◀</button><button id="padRight" aria-label="Steer right">▶</button><button id="padDown" aria-label="Brake and reverse">▼</button></div></div>
 <div id="joyBtns"><button id="joyRun">RUN</button><button id="joyGas" style="display:none">GAS</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
 <div id="menu" class="overlay">
   <h1>PALM COVE</h1>
@@ -174,7 +178,7 @@
       <tr><td>S (on title)</td><td>Stats screen</td></tr>
       <tr><td colspan="2" style="padding-top:10px"><b>TOUCH</b></td></tr>
       <tr><td>Joystick</td><td>Move on foot (enable it in Settings)</td></tr>
-      <tr><td>▲ ▼ ◀ ▶ buttons</td><td>Drive: ▲ throttle · ▼ brake/reverse · ◀ ▶ steer (shown while driving, replacing the joystick)</td></tr>
+      <tr><td>▲ ▼ ◀ ▶ buttons</td><td>Drive: the four drive buttons sit in ONE D-pad cluster (bottom-right): ▲ throttle · ▼ brake/reverse · ◀ ▶ steer (shown while driving, replacing the joystick)</td></tr>
       <tr><td>Drag (right side)</td><td>Orbit camera — left side stays the joystick</td></tr>
       <tr><td>RUN (hold)</td><td>Sprint on foot</td></tr>
       <tr><td>GAS (hold, while driving)</td><td>Boost</td></tr>

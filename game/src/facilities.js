@@ -223,6 +223,24 @@ function dressShop(group, room, accent) {
   addPoint(room, 'shop', 4.3, 0);
 }
 
+// Extra mart-only rows: two shelf units on the south side dressed with
+// small coloured goods boxes along their fronts, so the aisle reads as
+// stocked rather than as bare frames.
+function dressMartExtras(group, room) {
+  const { cx, cz } = room;
+  const goods = [0xe23b2e, 0x2e9fe8, 0xf2c12e, 0x3fae6a, 0xe86a2e, 0x7a5fd0];
+  const rows = [[-3.6, 3.9], [-0.4, 3.9]];
+  rows.forEach(([dx, dz], r) => {
+    addShelf(group, cx, cz, dx, dz, r ? 0x2e9fe8 : 0xe86a2e);
+    for (let i = 0; i < 5; i++) {
+      const c = goods[(r * 3 + i) % goods.length];
+      addBox(group, 0.34, 0.34, 0.3, c, cx + dx - 0.9 + i * 0.45, 1.62, cz + dz - 0.2);
+      addBox(group, 0.3, 0.3, 0.28, goods[(r * 3 + i + 2) % goods.length],
+        cx + dx - 0.9 + i * 0.45, 0.62, cz + dz - 0.2);
+    }
+  });
+}
+
 function dressArms(group, room) {
   const { cx, cz } = room;
   addCounter(group, cx, cz, 5.6, 0, 8.5, true, 0x3f444c);
@@ -266,6 +284,16 @@ function dressBank(group, room) {
   vault.material = mat(0xb9c0c9, { emissive: 0x22262c });
   addCyl(group, 0.32, 0.32, 0.35, 0x707880, cx + 7.25, 1.5, cz, { rz: Math.PI / 2 });
   addBox(group, 1.6, 0.9, 1.0, 0xc9a227, cx - 1.5, 0.45, cz + 3.8); // bullion cart, purely decorative
+  // A second, darker vault face on the north wall: a big flat circle
+  // with a hub, reading as a sealed vault door from across the room.
+  addCyl(group, 1.35, 1.35, 0.18, 0x2e3238, cx + 1.8, 1.45, cz - 6.3, { rx: Math.PI / 2 });
+  addCyl(group, 0.3, 0.3, 0.3, 0x707880, cx + 1.8, 1.45, cz - 6.22, { rx: Math.PI / 2 });
+  // Queue posts in front of the counter, roped together.
+  addCyl(group, 0.06, 0.08, 0.95, 0xb9c0c9, cx + 3.4, 0.48, cz - 1.6);
+  addCyl(group, 0.06, 0.08, 0.95, 0xb9c0c9, cx + 3.4, 0.48, cz + 1.6);
+  addBox(group, 0.16, 0.16, 0.16, 0xb9c0c9, cx + 3.4, 0.99, cz - 1.6);
+  addBox(group, 0.16, 0.16, 0.16, 0xb9c0c9, cx + 3.4, 0.99, cz + 1.6);
+  addBox(group, 0.07, 0.07, 3.2, 0xa8232e, cx + 3.4, 0.78, cz);
   addKeeper(group, room, 6.2, -2.2, 0x2e4a7a);
   // The bank has no shop stock; the ATM is its only service point.
 }
@@ -324,6 +352,16 @@ function dressClub(group, room) {
     group.add(dancer);
     room.dancers.push({ mesh: dancer, phase: i * 1.7 });
   });
+  // Raised stage on the west wall, opposite the bar: a low slab with a
+  // DJ booth on it and two translucent light beams raking down over it.
+  addBox(group, 3.4, 0.35, 5.2, 0x241a30, cx - 5.9, 0.18, cz);
+  addBox(group, 3.5, 0.08, 5.3, 0xff2e88, cx - 5.9, 0.39, cz, { emissive: 0xff2e88 });
+  addBox(group, 1.9, 1.0, 0.8, 0x14161c, cx - 6.6, 0.86, cz); // DJ booth
+  addBox(group, 1.7, 0.1, 0.6, 0x2ec5ff, cx - 6.6, 1.4, cz, { emissive: 0x2ec5ff });
+  addCyl(group, 0.14, 1.05, 2.3, 0x2ec5ff, cx - 6.9, 1.5, cz - 1.9,
+    { transparent: true, opacity: 0.26, emissive: 0x2ec5ff });
+  addCyl(group, 0.14, 1.05, 2.3, 0xff2e88, cx - 6.9, 1.5, cz + 1.9,
+    { transparent: true, opacity: 0.26, emissive: 0xff2e88 });
   addKeeper(group, room, 7.0, -3.4, 0x1e1e28);
 }
 
@@ -411,7 +449,10 @@ export function buildInteriors(scene) {
     else if (id === 'hospital') dressHospital(group, room);
     else if (id === 'palmetto-motel' || id === 'farshore-motel') dressMotel(group, room);
     else if (id === 'home') dressHome(group, room);
-    else if (SHOP_ACCENTS[id] !== undefined) dressShop(group, room, SHOP_ACCENTS[id]);
+    else if (SHOP_ACCENTS[id] !== undefined) {
+      dressShop(group, room, SHOP_ACCENTS[id]);
+      if (id === 'mart') dressMartExtras(group, room);
+    }
     else dressGeneric(group, room);
     root.add(group);
   }

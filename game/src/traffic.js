@@ -105,8 +105,9 @@ function respawnVehicle(vehicle, playerPos) {
 }
 
 export function initTraffic(scene) {
-  // Six cars working the city grid, split across both road axes.
-  for (let i = 0; i < 6; i++) {
+  // Eight cars working the city grid, split across both road axes
+  // (was six: +2 so boulevard crossings meet traffic more often).
+  for (let i = 0; i < 8; i++) {
     const vertical = chanceOf(0.5);
     let car;
     if (vertical) {
@@ -116,8 +117,9 @@ export function initTraffic(scene) {
     }
     firstCityTarget(car, vertical);
   }
-  // Four highway cars spaced down the long road past the towns.
-  const highwayZ = [-500, -1500, -2600, -3600];
+  // Five highway cars spaced down the long road past the towns
+  // (was four: +1 so the long northern drive is not a solo run).
+  const highwayZ = [-500, -1100, -1900, -2600, -3600];
   for (let i = 0; i < highwayZ.length; i++) {
     const southbound = i % 2 === 0;
     const car = spawnTrafficCar(scene, HIGHWAY.x + floatBetween(-3, 3), highwayZ[i], southbound ? Math.PI : 0);

@@ -59,20 +59,21 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 appEl.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-// Dusk look: deep violet sky so neon and sunset light read against it.
-scene.background = new THREE.Color(0x241536);
-scene.fog = new THREE.Fog(0x2a1838, 120, 900);
+// Dusk look: deep violet-pink sky so neon and sunset light read against it.
+scene.background = new THREE.Color(0x2b1538);
+scene.fog = new THREE.Fog(0x3d1d42, 120, 900);
 
 const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 3000);
 camera.position.set(0, 40, 120);
 camera.lookAt(0, 4, 0);
 
-// Hemisphere fill keeps shadowed streets readable at dusk.
-const hemi = new THREE.HemisphereLight(0x8a6bbf, 0x2e1a12, 0.75);
+// Hemisphere fill keeps shadowed streets readable at dusk; a pink-violet
+// sky against a darker warm ground gives the sunset grade its contrast.
+const hemi = new THREE.HemisphereLight(0xb07cc6, 0x1f0f18, 0.85);
 scene.add(hemi);
 
 // Low warm sun, angled like it is about to set over the bay.
-const sun = new THREE.DirectionalLight(0xff9a3c, 1.1);
+const sun = new THREE.DirectionalLight(0xff7a2e, 1.25);
 sun.position.set(-180, 90, 60);
 sun.castShadow = true;
 scene.add(sun);

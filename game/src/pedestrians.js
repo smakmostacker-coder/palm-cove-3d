@@ -52,7 +52,8 @@ function addPed(scene, opts) {
 export function initPeds(scene) {
   peds.length = 0;
   // Southern city: stroll parallel to a road, offset onto its sidewalk.
-  for (let i = 0; i < 28; i++) {
+  // 28 -> 39 walkers (+~40%): the city read as empty at first spawn.
+  for (let i = 0; i < 39; i++) {
     const side = pickOne([-1, 1]);
     if (chanceOf(0.5) && CITY_ROADS_X.length) {
       const road = pickOne(CITY_ROADS_X);
@@ -69,8 +70,9 @@ export function initPeds(scene) {
     }
   }
   // Towns: everyone walks the highway sidewalk that runs through town.
+  // 4 -> 6 walkers per town (+50%): town main streets felt deserted.
   for (const town of TOWNS) {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const side = pickOne([-1, 1]);
       addPed(scene, {
         area: town.name, axis: 'z', line: side * SIDEWALK, side,

@@ -643,6 +643,7 @@ export function buildWorld(scene) {
   buildNamedStructures(world);
   buildTownBuildings(world);
   buildDressing(world);
+  buildSpawnNeighbourhood(world);
 
   return world;
 }
@@ -1214,6 +1215,24 @@ function addBuilding(parent, x, z, w, d, h, color, sign) {
     addBox(parent, 0.3, 0.55, d + 0.35, x - w / 2 - 0.02, h + 0.38, z, lip, 0);
     addBox(parent, 0.3, 0.55, d + 0.35, x + w / 2 + 0.02, h + 0.38, z, lip, 0);
   }
+  if (h >= 18) {
+    // Rooftop variety for the skyline, picked by a coordinate hash so it
+    // never spends draws from the seeded placement generator: a water
+    // tank, a pair of AC boxes, or a thin parapet antenna.
+    const roofPick = texHash('roof|' + x + '|' + z) % 3;
+    if (roofPick === 0) {
+      addCylinder(parent, 1.15, 1.15, 2.1, x - w / 4, h + 1.25, z - d / 4, mat(0x8a6f4d), 12);
+      addBox(parent, 0.18, 0.5, 0.18, x - w / 4 - 0.7, h + 0.35, z - d / 4, mat(0x6e5638), 0);
+      addBox(parent, 0.18, 0.5, 0.18, x - w / 4 + 0.7, h + 0.35, z - d / 4, mat(0x6e5638), 0);
+    } else if (roofPick === 1) {
+      addBox(parent, 2.2, 0.9, 1.6, x + w / 5, h + 0.65, z + d / 5, mat(0x9aa0a8), 0);
+      addBox(parent, 1.5, 0.7, 1.2, x - w / 5, h + 0.55, z - d / 6, mat(0x848b94), 0);
+    } else {
+      addCylinder(parent, 0.06, 0.09, 3.4, x + w / 4, h + 1.9, z + d / 4, mat(0x3c4048), 6);
+      addBox(parent, 0.28, 0.28, 0.28, x + w / 4, h + 3.65, z + d / 4,
+        mat(0xff2a20, { emissive: 0x881108 }), 0);
+    }
+  }
   registerBox(x - w / 2 + 0.2, x + w / 2 - 0.2, z - d / 2 + 0.2, z + d / 2 - 0.2);
   return h;
 }
@@ -1247,6 +1266,88 @@ function addSignBoard(parent, w, h, x, y, z, text, ry) {
   parent.add(board);
   return board;
 }
+
+// --- B1b: striped awnings and neon boards (boulevard / home dressing) -----
+
+const stripeMatCache = new Map();
+
+// Canvas stripes for awnings: alternating bands, tiled along the box so a
+// long awning reads as fabric rather than a painted slab.
+function stripeMaterial(colorA, colorB) {
+  const key = 'stripe|' + colorA + '|' + colorB;
+  let m = stripeMatCache.get(key);
+  if (m) return m;
+  const canvas = makeCanvas(128, 32);
+  if (!canvas) { m = mat(colorA); stripeMatCache.set(key, m); return m; }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) { m = mat(colorA); stripeMatCache.set(key, m); return m; }
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = cssColor(i % 2 ? colorA : colorB);
+    ctx.fillRect(i * 16, 0, 16, 32);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.repeat.x = 3;
+  m = new THREE.MeshLambertMaterial({ map: tex });
+  stripeMatCache.set(key, m);
+  return m;
+}
+
+const neonMatCache = new Map();
+
+// Neon sign board: dark board, glowing letters. A MeshBasicMaterial face
+// keeps the letters at full brightness regardless of the dusk lighting.
+function neonMaterial(text, glowCss) {
+  const key = 'neon|' + text + '|' + glowCss;
+  let m = neonMatCache.get(key);
+  if (m) return m;
+  const canvas = makeCanvas(256, 64);
+  if (!canvas) { m = mat(0x121a26); neonMatCache.set(key, m); return m; }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) { m = mat(0x121a26); neonMatCache.set(key, m); return m; }
+  ctx.fillStyle = '#0d0716';
+  ctx.fillRect(0, 0, 256, 64);
+  ctx.strokeStyle = glowCss;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(4, 4, 248, 56);
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = glowCss;
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#fff7ea';
+  ctx.fillText(String(text).toUpperCase().slice(0, 12), 128, 34, 230);
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = glowCss;
+  ctx.fillText(String(text).toUpperCase().slice(0, 12), 128, 34, 230);
+  m = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas) });
+  neonMatCache.set(key, m);
+  return m;
+}
+
+function addNeonBoard(parent, w, h, x, y, z, text, glowCss) {
+  const board = new THREE.Mesh(unitBox(), neonMaterial(text, glowCss));
+  board.scale.set(w, h, 0.16);
+  board.position.set(x, y, z);
+  parent.add(board);
+  return board;
+}
+
+// Sloped striped awning: a thin box tilted so its outer edge sits lower
+// than the edge against the wall. dirZ points from the wall outward.
+function addStripedAwning(parent, x, y, faceZ, w, dirZ, colorA, colorB) {
+  const awn = new THREE.Mesh(unitBox(), stripeMaterial(colorA, colorB));
+  awn.scale.set(w, 0.09, 1.9);
+  awn.position.set(x, y, faceZ + dirZ * 0.95);
+  awn.rotation.x = dirZ * 0.34;
+  parent.add(awn);
+  return awn;
+}
+
+const NEON_WORDS = [
+  ['COVE', '#ff5f9e'], ['HOTEL', '#2ec5ff'], ['BAR', '#ff7a2e'],
+  ['DINER', '#ffe12e'], ['PALMS', '#7dff2e'],
+];
 
 // --- B2: city buildings ----------------------------------------------------
 
@@ -1338,6 +1439,22 @@ function buildCityBuildings(parent) {
           const h = onBoulevard ? floatBetween(18, 38) : floatBetween(8, 20);
           addBuilding(parent, bx, bz, w, d, h, pickOne(CITY_PALETTE), null);
           BUILD_STATS.cityBuildings++;
+          if (onBoulevard) {
+            // Storefront dressing on the side that faces Palm Boulevard:
+            // a striped awning over the ground floor on every block, and
+            // a neon board on roughly every second one (coordinate hash,
+            // so the seeded placement sequence is untouched).
+            const faceZ = bz > 0 ? bz - d / 2 : bz + d / 2;
+            const dirZ = bz > 0 ? -1 : 1;
+            addStripedAwning(parent, bx, 3.1, faceZ, Math.min(w * 0.82, 13), dirZ,
+              0xd8542e, 0xf2ead2);
+            const neonPick = texHash('neon|' + bx + '|' + bz);
+            if (neonPick % 2 === 0) {
+              const word = NEON_WORDS[neonPick % NEON_WORDS.length];
+              addNeonBoard(parent, 5.2, 1.15, bx, 4.7, faceZ + dirZ * 0.18,
+                word[0], word[1]);
+            }
+          }
         }
       }
     }
@@ -2264,6 +2381,59 @@ function buildBeachProps(parent) {
       mat(canopyColours[(i + 2) % canopyColours.length]), 0);
     towel.rotation.y = floatBetween(-0.5, 0.5);
   }
+}
+
+// --- C7: spawn neighbourhood dressing (Coral Heights, around HOME) ---------
+// HOME sits at (-40, 96) with its doorstep at (-40, 105) to the south.
+// Everything here keeps the doorway path (x near -40, z 102 and south)
+// and the roads clear: hedges and posts sit on lot lines to either side.
+
+function buildPorchLight(parent, x, z) {
+  addCylinder(parent, 0.09, 0.11, 2.6, x, 1.3, z, mat(0x3c4048), 8);
+  // Warm lamp box on top: the emissive head reads as a lit porch light.
+  addBox(parent, 0.42, 0.42, 0.42, x, 2.75, z,
+    mat(0xffdf9e, { emissive: 0xccaa55 }), 0);
+  registerCircle(x, z, 0.24);
+}
+
+function buildHedge(parent, cx, cz, len) {
+  addBox(parent, len, 0.62, 0.7, cx, 0.31, cz, mat(0x3f7d33), 0);
+  addBox(parent, len, 0.2, 0.55, cx, 0.68, cz, mat(0x4d8f3f), 0);
+  registerBox(cx - len / 2, cx + len / 2, cz - 0.35, cz + 0.35);
+}
+
+function buildSpawnNeighbourhood(parent) {
+  const hedgeZ = 103;
+  // Front-garden hedges along the neighbouring lots and the home's own
+  // frontage, split either side of the doorway path.
+  buildHedge(parent, -60, hedgeZ, 12);
+  buildHedge(parent, -20, hedgeZ, 12);
+  buildHedge(parent, -46.75, hedgeZ, 4.5);
+  buildHedge(parent, -33.25, hedgeZ, 4.5);
+
+  // Porch-light posts: two flanking the home's path, one at each
+  // neighbouring lot's front corner.
+  buildPorchLight(parent, -43.5, 103.5);
+  buildPorchLight(parent, -36.5, 103.5);
+  buildPorchLight(parent, -53, 103.5);
+  buildPorchLight(parent, -27.5, 103.5);
+
+  // Garden palms in the front gardens, clear of houses and roads.
+  buildPalm(parent, -52, 88);
+  buildPalm(parent, -28, 88);
+  buildPalm(parent, -58, 122);
+
+  // Driveway slabs running south from the neighbouring fronts and from
+  // the home's east side — never across the doorstep path at x -40.
+  const driveMat = mat(0xa9a49a);
+  addBox(parent, 5, 0.06, 12, -60, 0.03, 110, driveMat, 0);
+  addBox(parent, 5, 0.06, 12, -27, 0.03, 110, driveMat, 0);
+  addBox(parent, 4, 0.06, 12, -11, 0.03, 110, driveMat, 0);
+
+  // Striped awnings over the home's two front windows, either side of
+  // the porch that already shades the door itself.
+  addStripedAwning(parent, -44.3, 2.55, HOME.z + 4, 2.2, 1, 0x2e9e8f, 0xf2ead2);
+  addStripedAwning(parent, -35.7, 2.55, HOME.z + 4, 2.2, 1, 0x2e9e8f, 0xf2ead2);
 }
 
 function buildDressing(parent) {

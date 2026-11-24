@@ -7,10 +7,10 @@
 // pause-menu FULL MAP draws the entire Florida silhouette: city at the
 // southern tip, marsh, the long spine, the panhandle, the Keys arc.
 import { G } from './state.js';
-import { ROADS, WORLD, KEYS, MARSH } from './config.js';
+import { ROADS, WORLD, KEYS, MARSH, districtAt } from './config.js';
 import { NORTH_END, PANHANDLE_Z, SOUTH_STREETS, TOWN_STREETS, DIAG_SEG, PROM_POINTS, landHalfWidthAt, buildingRecords, MARSH_CHANNELS, MARSH_ROAD, FLYOVER_SEG, LAKE_OKEECHOBEE } from './city.js'; // PANHANDLE_Z: coastPoly's breakpoint list
 import { ITEM_DEFS } from './inventory.js';
-import { HOME, FACILITIES, ENTERABLES, PLACES, PRISON } from './facilities.js';
+import { HOME, FACILITIES, ENTERABLES, PLACES, PRISON, currentInterior } from './facilities.js';
 import { settings, saveSettings } from './settings.js';
 
 const el = {};
@@ -315,15 +315,88 @@ function drawMinimap(playerPos, targetPos, copPositions) {
   // level (NEAR 60×76, MID 110×140, FAR 220×280 world units).
   syncZoomBtn(); // keep the button label honest if settings changed elsewhere
   const lvl = MAP_ZOOM_LEVELS[mapZoomIndex()];
+  // INDOORS: interior rooms live at off-map coordinates (~x 2450) that the
+  // world map reads as open sea, so centring on the player drew a solid
+  // blue square. Instead centre on the building's OUTDOOR door, mark the
+  // door with the player arrow, and banner the panel INDOORS + the place
+  // name and its district — the player sees where the building stands.
+  const interior = typeof G !== 'undefined' && G.interior ? currentInterior() : null;
+  if (interior && interior.door) {
+    const view = { cx: interior.door.x, cz: interior.door.z, halfW: lvl.halfW, halfH: lvl.halfH };
+    const doorPos = { x: interior.door.x, z: interior.door.z };
+    drawFloridaMap(el.mapCtx, el.map.height, el.map.width, doorPos, targetPos, copPositions, view);
+    drawIndoorBanner(interior);
+    return;
+  }
   const view = { cx: playerPos.x, cz: playerPos.z, halfW: lvl.halfW, halfH: lvl.halfH };
   drawFloridaMap(el.mapCtx, el.map.height, el.map.width, playerPos, targetPos, copPositions, view);
+}
+
+// The INDOORS banner drawn over the door-centred minimap: a dark header
+// strip naming the state, the place, and the district its door stands in.
+function drawIndoorBanner(interior) {
+  const c = el.mapCtx, W2 = el.map.width, S = el.map.height;
+  c.fillStyle = 'rgba(8,10,18,0.88)';
+  c.fillRect(0, 0, W2, 34);
+  c.fillStyle = '#ffd32a';
+  c.font = '900 13px system-ui';
+  c.fillText('⌂ INDOORS', 7, 15);
+  c.fillStyle = '#ffffff';
+  c.font = '700 10px system-ui';
+  const name = String(interior.name || 'Interior').slice(0, 24);
+  const district = districtAt(interior.door.x, interior.door.z);
+  c.fillText(name + ' · ' + district, 7, 29);
+  c.fillStyle = 'rgba(8,10,18,0.75)';
+  c.fillRect(0, S - 15, W2, 15);
+  c.fillStyle = '#7ef0d4';
+  c.font = '700 9px system-ui';
+  c.fillText('MAP SHOWS THE BUILDING OUTSIDE', 7, S - 4);
+}
+
+// ---- Full map zoom + pan ----------------------------------------------------
+// The full map used to be one fixed whole-island view. It now carries a
+// view state: null = the whole island (the reset state); otherwise a
+// {cx, cz, halfW, halfH} window the player zooms (pinch / + − buttons)
+// and pans (drag). drawFloridaMap is data-driven and clips to any view,
+// so markers, roads and the PLACES directory stay consistent at every
+// level. Zoom keeps the legacy whole-island aspect (720 × 2361) and is
+// clamped so the closest view is street level (halfW 55 ≈ a town's
+// streets legible) and the widest is the whole island itself.
+const FULLMAP_HOME = { cx: 0, cz: (442 + NORTH_END) / 2, halfW: 720, halfH: (442 - NORTH_END) / 2 };
+let fullMapView = null;
+export function getFullMapView() { return fullMapView ? { ...fullMapView } : { ...FULLMAP_HOME }; }
+export function fullMapZoomFactor() { return FULLMAP_HOME.halfW / getFullMapView().halfW; }
+export function resetFullMapView() { fullMapView = null; }
+export function zoomFullMap(factor, focus) {
+  const v = getFullMapView();
+  const halfW = Math.min(FULLMAP_HOME.halfW, Math.max(55, v.halfW / factor));
+  const k = halfW / v.halfW;
+  const f = focus || { x: v.cx, z: v.cz };
+  const cx = f.x + (v.cx - f.x) * k, cz = f.z + (v.cz - f.z) * k;
+  fullMapView = halfW >= FULLMAP_HOME.halfW ? null : { cx, cz, halfW, halfH: v.halfH * k };
+  return getFullMapView();
+}
+export function panFullMap(dxWorld, dzWorld) {
+  if (!fullMapView) return getFullMapView();
+  fullMapView = { ...fullMapView, cx: fullMapView.cx + dxWorld, cz: fullMapView.cz + dzWorld };
+  return getFullMapView();
+}
+// Canvas-pixel → world conversion for the full map canvas, matching
+// drawFloridaMap's own px/pz mapping for the current view.
+export function fullMapPixelToWorld(cv, pxX, pxY) {
+  const v = getFullMapView();
+  return {
+    x: v.cx + (pxX / cv.width - 0.5) * v.halfW * 2,
+    z: v.cz - v.halfH + (pxY / cv.height) * v.halfH * 2,
+  };
 }
 
 export function drawFullMap() {
   const cv = document.getElementById('fullmap');
   if (!cv) return;
   const c = cv.getContext('2d');
-  drawFloridaMap(c, cv.height, cv.width, window.__playerPos || { x: 0, z: 0 }, null, []);
+  const view = getFullMapView();
+  drawFloridaMap(c, cv.height, cv.width, window.__playerPos || { x: 0, z: 0 }, null, [], view);
   // PLACES list under the map: every named facility and enterable with its
   // street hint — the directory the player asked for. The element is
   // created here (not in index.html) and refreshed on every map open.
@@ -338,12 +411,22 @@ export function drawFullMap() {
     }
     pl.innerHTML = '<b style="color:#ffd32a">PLACES · PALM COVE</b><br>' + PLACES.map((p) => p.name + (p.hint ? ' — ' + p.hint : '')).join('<br>');
   }
-  c.fillStyle = '#ffd32a';
-  c.font = '900 15px system-ui';
-  c.fillText('PALM COVE · FLORIDA PENINSULA', 14, 22);
-  c.font = '12px system-ui';
-  c.fillStyle = '#fff';
-  c.fillText('TALLAHASSEE PALMS — FAR SHORE', 14, 44);
-  c.fillText('THE GLADES · THE SPINE →', 14, 62);
-  c.fillText('KEY SOLANO →', 14, cv.height - 12);
+  // Region labels belong to the whole-island view only — at street zoom
+  // they would sit on top of the wrong streets.
+  if (!fullMapView) {
+    c.fillStyle = '#ffd32a';
+    c.font = '900 15px system-ui';
+    c.fillText('PALM COVE · FLORIDA PENINSULA', 14, 22);
+    c.font = '12px system-ui';
+    c.fillStyle = '#fff';
+    c.fillText('TALLAHASSEE PALMS — FAR SHORE', 14, 44);
+    c.fillText('THE GLADES · THE SPINE →', 14, 62);
+    c.fillText('KEY SOLANO →', 14, cv.height - 12);
+  } else {
+    c.fillStyle = 'rgba(8,10,18,0.8)';
+    c.fillRect(8, 8, 168, 20);
+    c.fillStyle = '#ffd32a';
+    c.font = '900 12px system-ui';
+    c.fillText('ZOOM ×' + fullMapZoomFactor().toFixed(1) + ' · DRAG TO PAN', 14, 22);
+  }
 }

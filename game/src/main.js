@@ -17,7 +17,7 @@ import { nearestStealable, nearestJackable, carjack, enterCar, exitCar, updateDr
 import { buildPolice, updatePolice, commitCrime, policePositions, cops, officers } from './police.js';
 import { punch, shoot } from './combat.js';
 import { initMissions, updateMissions, onAction, onEnterCar, startRace, startTaxi, sidePrompt, missionTarget, startCurrentMission, setEndingHandler, replayFinale, computeEnding, finishFinale, setPartner, ENDINGS, questLogData, setTrackedQuest, getTrackedQuest } from './missions.js';
-import { initHud, updateHud, showDialogue, showBanner, drawFullMap } from './hud.js';
+import { initHud, updateHud, showDialogue, showBanner, drawFullMap, zoomFullMap, panFullMap, resetFullMapView, getFullMapView, fullMapZoomFactor, fullMapPixelToWorld } from './hud.js';
 import { saveGame, loadSave, applySave, clearSave } from './save.js';
 import { parseShot, stageShot } from './shots.js';
 import { sfx, radio } from './audio.js';
@@ -88,8 +88,18 @@ function enforceChrome() {
   if (hud.style.display !== hudWant) hud.style.display = hudWant;
   const joyOn = settings.joystick && G.mode === 'playing';
   const joyEl = $('joy'), joyBtnsEl = $('joyBtns');
-  const joyWant = joyOn ? 'block' : 'none';
+  // While driving on touch, the slide joystick is replaced by the D-pad
+  // (initDrivePad): hide the stick, show the four direction buttons.
+  const joyWant = joyOn && !G.driving ? 'block' : 'none';
   if (joyEl.style.display !== joyWant) joyEl.style.display = joyWant;
+  const dpadEl = $('dpad');
+  if (dpadEl) {
+    const dpadWant = joyOn && G.driving ? 'block' : 'none';
+    if (dpadEl.style.display !== dpadWant) dpadEl.style.display = dpadWant;
+    if (!G.driving && (G.driveTouch.up || G.driveTouch.down || G.driveTouch.left || G.driveTouch.right)) {
+      G.driveTouch.up = G.driveTouch.down = G.driveTouch.left = G.driveTouch.right = false;
+    }
+  }
   const btnsWant = joyOn ? 'flex' : 'none';
   if (joyBtnsEl.style.display !== btnsWant) joyBtnsEl.style.display = btnsWant;
   // RUN and GAS swap by mode: RUN is the on-foot sprint button, GAS is
@@ -218,9 +228,71 @@ let mapFrom = 'pause';
 function openMap(from) {
   mapFrom = from;
   if (from === 'game') G.mode = 'paused';
+  resetFullMapView(); // every open starts on the whole island
   showOverlay('map');
   drawFullMap();
+  syncMapZoomLabel();
 }
+function syncMapZoomLabel() {
+  const l = $('mapZoomLabel');
+  if (l) l.textContent = '×' + fullMapZoomFactor().toFixed(1);
+}
+// Full-map zoom controls: + / − buttons, RESET back to the whole island,
+// drag to pan, and pinch to zoom — all redrawing through hud.js's view
+// state so markers and the PLACES list stay consistent at every level.
+$('btnMapZoomIn').onclick = () => { zoomFullMap(1.6); drawFullMap(); syncMapZoomLabel(); };
+$('btnMapZoomOut').onclick = () => { zoomFullMap(1 / 1.6); drawFullMap(); syncMapZoomLabel(); };
+$('btnMapReset').onclick = () => { resetFullMapView(); drawFullMap(); syncMapZoomLabel(); };
+(function initFullMapGestures() {
+  const cv = $('fullmap');
+  if (!cv) return;
+  const pointers = new Map();
+  let pinchDist = 0;
+  const toCanvasPx = (e) => {
+    const r = cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * (cv.width / r.width), y: (e.clientY - r.top) * (cv.height / r.height), cx: e.clientX, cy: e.clientY };
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    pointers.set(e.pointerId, toCanvasPx(e));
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchDist = Math.hypot(a.cx - b.cx, a.cy - b.cy);
+    }
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    const now = toCanvasPx(e);
+    pointers.set(e.pointerId, now);
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.cx - b.cx, a.cy - b.cy);
+      if (pinchDist > 0 && Math.abs(d - pinchDist) > 4) {
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        zoomFullMap(d / pinchDist, fullMapPixelToWorld(cv, mid.x, mid.y));
+        pinchDist = d;
+        drawFullMap(); syncMapZoomLabel();
+      }
+      return;
+    }
+    if (pointers.size === 1) {
+      const v = getFullMapView();
+      const dxW = -(now.x - prev.x) / cv.width * v.halfW * 2;
+      const dzW = -(now.y - prev.y) / cv.height * v.halfH * 2;
+      if (dxW || dzW) { panFullMap(dxW, dzW); drawFullMap(); }
+    }
+  });
+  const end = (e) => { pointers.delete(e.pointerId); pinchDist = 0; };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const p = toCanvasPx(e);
+    zoomFullMap(e.deltaY < 0 ? 1.2 : 1 / 1.2, fullMapPixelToWorld(cv, p.x, p.y));
+    drawFullMap(); syncMapZoomLabel();
+  }, { passive: false });
+})();
 function closeMap() {
   if (mapFrom === 'game') { showOverlay(null); G.mode = 'playing'; }
   else showOverlay('pause');
@@ -234,6 +306,18 @@ $('minimap').addEventListener('click', () => {
   if (G.mode !== 'playing') return;
   openMap('game');
 });
+// The minimap ZOOM button sits directly under the minimap canvas; its tap
+// must cycle the zoom and NEVER fall through to the minimap's tap-to-open
+// handler. It is a sibling element (so events never targeted the canvas),
+// but belt-and-braces: swallow the press at the button in capture phase on
+// every pointer flavour, and let hud.js's click handler do the cycling.
+(function hardenZoomBtn() {
+  const zb = $('zoomBtn');
+  if (!zb) return;
+  for (const t of ['pointerdown', 'touchstart', 'mousedown']) {
+    zb.addEventListener(t, (e) => { e.stopPropagation(); }, { capture: true, passive: true });
+  }
+})();
 
 // ---- Settings panel ---------------------------------------------------------
 let settingsFrom = 'title';
@@ -420,7 +504,7 @@ const TUT_STEPS = [
   { d: 'Interact — E at doors, shops and cars. Head out of the house', t: 'Interact — tap E at doors, shops and cars. Head out of the house', done: () => tutFlags.interacted },
   { d: 'Hotbar — press 1–5 to select a slot, X uses an item', t: 'Hotbar — tap a slot to select it, X uses an item', done: () => tutFlags.slot },
   { d: 'Steal a vehicle — walk to a car and press E', t: 'Steal a vehicle — walk to a car and tap E', done: () => !!G.driving },
-  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — joystick steers · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
+  { d: 'Drive — W A S D · hold Space for a GAS boost, E gets out', t: 'Drive — ▲ throttle, ◀ ▶ steer · hold GAS to boost, E gets out', done: () => G.driving && Math.abs(G.driving.speed) > 8 },
   { d: 'Fight — F punches · mouse click fires an equipped weapon', t: 'Fight — F punches · the fire button shoots an equipped weapon', done: () => tutFlags.combat },
 ];
 function updateTutorial() {
@@ -589,6 +673,43 @@ addEventListener('resize', () => {
   }
 })();
 
+// ---- Touch driving D-pad ------------------------------------------------------
+// While driving, enforceChrome hides the slide joystick and shows these
+// four buttons instead: ▲ throttle, ▼ brake/reverse (right thumb), ◀ ▶
+// steer (left thumb) — positioned so steer + throttle can be held together.
+// Each button publishes a held flag on G.driveTouch; driving.js turns the
+// pedals into the same proportional target-speed model as the analog stick
+// and RAMPS the steering. Multi-touch: every button tracks its own pointer
+// id, so two thumbs work independently. On-foot these stay hidden and the
+// joystick is untouched.
+(function initDrivePad() {
+  const bind = (id, key) => {
+    const b = $(id);
+    if (!b) return;
+    let pid = null;
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pid = e.pointerId;
+      try { b.setPointerCapture(pid); } catch (err) { /* best-effort */ }
+      G.driveTouch[key] = true;
+      b.classList.add('held');
+    });
+    const end = (e) => {
+      if (pid !== null && e.pointerId !== pid) return;
+      pid = null;
+      G.driveTouch[key] = false;
+      b.classList.remove('held');
+    };
+    b.addEventListener('pointerup', end);
+    b.addEventListener('pointercancel', end);
+    b.addEventListener('lostpointercapture', end);
+  };
+  bind('padUp', 'up');
+  bind('padDown', 'down');
+  bind('padLeft', 'left');
+  bind('padRight', 'right');
+})();
+
 // ---- Per-frame collisions and pickups -----------------------------------------
 let pedCooldown = 0;
 function footCollisions(dt) {
@@ -748,6 +869,9 @@ window.__game = {
     return e ? enterInterior(e, player.pos) : null;
   },
   questLogData, setTrackedQuest, getTrackedQuest,
+  mapView: () => ({ view: getFullMapView(), factor: fullMapZoomFactor() }),
+  zoomFullMap: (f) => { zoomFullMap(f); drawFullMap(); },
+  resetFullMapView: () => { resetFullMapView(); drawFullMap(); },
   tutorial: () => ({ step: tutStep, done: tutDone }),
   teleport: (x, z) => { player.pos.set(x, 0.3, z); if (G.driving) G.driving.pos.set(x, 0, z); },
 };

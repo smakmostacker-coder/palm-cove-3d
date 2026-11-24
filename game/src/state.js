@@ -51,6 +51,7 @@ export const G = {
   joyVec: { x: 0, y: 0 }, // continuous analog joystick vector (main.js initJoystick)
   sprintTouch: false, // touch RUN button held (main.js initJoystick)
   boostTouch: false, // touch GAS button held, driving only (main.js initJoystick)
+  driveTouch: { up: false, down: false, left: false, right: false }, // touch driving D-pad held state (main.js initDrivePad)
   mouseDown: false,
 };
 

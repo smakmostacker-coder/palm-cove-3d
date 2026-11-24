@@ -22,8 +22,8 @@
   #objectiveBox { position:absolute; top:12px; left:50%; transform:translateX(-50%); max-width:520px; padding:8px 16px; text-align:center; font-weight:700; font-size:15px; }
   #district { position:absolute; top:52px; right:14px; padding:4px 10px; font-size:24px; font-weight:900; font-style:italic; text-transform:uppercase; text-shadow:2px 2px 0 #000; color:#ffd9ec; }
   #minimap { position:absolute; right:12px; top:92px; width:118px; height:150px; border:2px solid rgba(255,255,255,.55); border-radius:10px; cursor:pointer; pointer-events:auto; }
-  #zoomBtn { position:absolute; right:12px; top:252px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
-  #btnQuestHud { position:absolute; right:12px; top:296px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
+  #zoomBtn { position:absolute; right:12px; top:248px; pointer-events:auto; font-size:15px; font-weight:900; padding:14px 18px; margin:0; min-width:118px; min-height:52px; z-index:9; touch-action:manipulation; }
+  #btnQuestHud { position:absolute; right:12px; top:310px; pointer-events:auto; font-size:14px; padding:8px 14px; margin:0; }
   #hotbar { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; pointer-events:auto; }
   .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.35); border-radius:8px; background:rgba(10,10,18,.66); position:relative; text-align:center; cursor:pointer; }
   .slot.sel { border-color:#ffd32a; box-shadow:0 0 10px rgba(255,211,42,.55); }
@@ -80,6 +80,17 @@
   #joyKnob { position:absolute; left:50%; top:50%; width:52px; height:52px; border-radius:50%; background:rgba(255,255,255,.45); transform:translate(-50%,-50%); }
   #joyBtns { position:fixed; right:26px; bottom:220px; display:none; flex-direction:column; gap:10px; z-index:8; }
   #joyBtns button { width:58px; height:58px; border-radius:50%; padding:0; font-size:15px; }
+  /* Driving D-pad (touch only, shown instead of the joystick while driving):
+     steering cluster bottom-left, throttle/brake cluster bottom-right, so
+     both thumbs can hold steer + throttle together. GAS stays in #joyBtns. */
+  #dpad { position:fixed; inset:auto 0 0 0; display:none; z-index:8; pointer-events:none; }
+  #dpadSteer { position:absolute; left:18px; bottom:96px; display:flex; gap:14px; pointer-events:none; }
+  #dpadPedals { position:absolute; right:18px; bottom:96px; display:flex; gap:14px; pointer-events:none; }
+  #dpad button { pointer-events:auto; width:76px; height:76px; border-radius:50%; padding:0; margin:0; font-size:30px; background:rgba(255,211,42,.88); color:#1e272e; border:2px solid rgba(255,255,255,.6); touch-action:none; user-select:none; -webkit-user-select:none; }
+  #dpad button.held { background:#fff; transform:scale(1.08); }
+  #fullmap { touch-action:none; }
+  #mapBtns { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  #mapBtns button { font-size:16px; padding:10px 18px; margin:0; min-width:52px; min-height:48px; }
 </style>
 </head>
 <body>
@@ -107,6 +118,7 @@
 </div>
 <div id="tutBox" class="panel"><span id="tutText"></span><button id="btnTutSkip">Skip tutorial</button></div>
 <div id="joy"><div id="joyKnob"></div></div>
+<div id="dpad"><div id="dpadSteer"><button id="padLeft" aria-label="Steer left">◀</button><button id="padRight" aria-label="Steer right">▶</button></div><div id="dpadPedals"><button id="padDown" aria-label="Brake and reverse">▼</button><button id="padUp" aria-label="Throttle">▲</button></div></div>
 <div id="joyBtns"><button id="joyRun">RUN</button><button id="joyGas" style="display:none">GAS</button><button id="joyE">E</button><button id="joyF">F</button><button id="joyX">X</button><button id="joyRadio" style="font-size:11px">RADIO</button></div>
 <div id="menu" class="overlay">
   <h1>PALM COVE</h1>
@@ -161,7 +173,8 @@
       <tr><td>Esc / P</td><td>Pause / resume (map, quests, stats, controls, settings)</td></tr>
       <tr><td>S (on title)</td><td>Stats screen</td></tr>
       <tr><td colspan="2" style="padding-top:10px"><b>TOUCH</b></td></tr>
-      <tr><td>Joystick</td><td>Move / drive (enable it in Settings)</td></tr>
+      <tr><td>Joystick</td><td>Move on foot (enable it in Settings)</td></tr>
+      <tr><td>▲ ▼ ◀ ▶ buttons</td><td>Drive: ▲ throttle · ▼ brake/reverse · ◀ ▶ steer (shown while driving, replacing the joystick)</td></tr>
       <tr><td>Drag (right side)</td><td>Orbit camera — left side stays the joystick</td></tr>
       <tr><td>RUN (hold)</td><td>Sprint on foot</td></tr>
       <tr><td>GAS (hold, while driving)</td><td>Boost</td></tr>
@@ -175,6 +188,7 @@
 <div id="mapMenu" class="overlay">
   <h1 style="font-size:34px">PALM COVE — MAP</h1>
   <canvas id="fullmap" width="300" height="540" style="border:2px solid rgba(255,255,255,.5);border-radius:10px"></canvas>
+  <div id="mapBtns"><button id="btnMapZoomOut" class="secondary" aria-label="Zoom out">−</button><button id="btnMapZoomIn" aria-label="Zoom in">+</button><button id="btnMapReset" class="secondary">RESET · WHOLE ISLAND</button><span id="mapZoomLabel" style="font-weight:800;color:#ffd32a">×1.0</span></div>
   <div><button id="btnMapClose">Back</button></div>
 </div>
 <div id="settingsMenu" class="overlay">

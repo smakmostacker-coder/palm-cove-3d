@@ -124,7 +124,10 @@ export function updatePlayer(dt, camera) {
   // over water (city.js isLand) means swimming, over land means walking,
   // so entering/leaving the sea needs no event and a save made mid-swim
   // self-heals on load. Re-derived after the move below as well.
-  player.swimming = !isLand(player.pos.x, player.pos.z);
+  // Interiors are dry by definition: their rooms sit at off-map
+  // coordinates isLand() reads as open sea, so without this guard the
+  // player would tread water (lean, stroke pose, sunken height) indoors.
+  player.swimming = !G.interior && !isLand(player.pos.x, player.pos.z);
   G.swimming = player.swimming;
   const speed = (player.swimming
     ? (player.sprinting ? SWIM_SPRINT_SPEED : SWIM_SPEED)
@@ -172,7 +175,7 @@ export function updatePlayer(dt, camera) {
   } else {
     player.idle += dt;
   }
-  player.swimming = !isLand(player.pos.x, player.pos.z);
+  player.swimming = !G.interior && !isLand(player.pos.x, player.pos.z);
   G.swimming = player.swimming;
   collideBuildings(player.pos, 0.7, player.swimming ? { sea: true } : null);
   // Vertical: on land the mesh rides the ground exactly as before. While

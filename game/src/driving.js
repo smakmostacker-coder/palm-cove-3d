@@ -128,6 +128,11 @@ function joyAxis(v) {
   if (a <= 0.18) return 0;
   return Math.sign(v) * Math.min(1, (a - 0.18) / 0.82);
 }
+// Touch D-pad steering ramp: a held ◀/▶ eases the steer value toward full
+// lock over ~0.45 s (and eases back to centre on release) instead of
+// snapping to ±1, so the speed-tapered steering above stays controllable
+// with binary buttons. Keyboard/stick steering is unaffected.
+let padSteer = 0;
 export function updateDriving(dt, camera, onCrash) {
   const car = G.driving;
   if (!car) return;
@@ -145,6 +150,12 @@ export function updateDriving(dt, camera, onCrash) {
   let throttle = 0;
   if (k['KeyW'] || k['ArrowUp']) throttle = 1;
   else if (k['KeyS']) throttle = -1;
+  // Touch D-pad pedals: ▲ full throttle, ▼ brake/reverse — the same
+  // proportional target-speed model below (full input = base cap; GAS is
+  // still the only way past base). While moving forward ▼ first brakes
+  // to a stop, then reverses — that falls out of the target-speed model.
+  else if (G.driveTouch && G.driveTouch.up) throttle = 1;
+  else if (G.driveTouch && G.driveTouch.down) throttle = -1;
   else throttle = -joyAxis(G.joyVec ? G.joyVec.y : 0);
   if (car.burning || car.burnt) car.speed *= Math.max(0, 1 - 3 * dt);
   else if (throttle !== 0) {
@@ -160,7 +171,19 @@ export function updateDriving(dt, camera, onCrash) {
   // Steering in [-1, 1]: keyboard binary, stick X proportional (stick
   // right = KeyD = steer −1 in this convention).
   let steer = (k['KeyA'] ? 1 : 0) - (k['KeyD'] ? 1 : 0);
-  if (steer === 0) steer = -joyAxis(G.joyVec ? G.joyVec.x : 0);
+  if (steer === 0 && G.driveTouch && (G.driveTouch.left || G.driveTouch.right)) {
+    // D-pad steering (◀ = KeyA = steer +1 in this convention), ramped.
+    const target = (G.driveTouch.left ? 1 : 0) - (G.driveTouch.right ? 1 : 0);
+    const step = dt / 0.45;
+    padSteer += Math.max(-step, Math.min(step, target - padSteer));
+    steer = padSteer;
+  } else {
+    if (steer === 0) steer = -joyAxis(G.joyVec ? G.joyVec.x : 0);
+    // Keep the ramp centred whenever the pad is not the active source.
+    const step = dt / 0.45;
+    padSteer += Math.max(-step, Math.min(step, 0 - padSteer));
+    if (steer === 0) steer = padSteer; // release glide: ease back to centre
+  }
   if (car.speed !== 0) {
     // Speed-aware yaw: the old min(1, |speed|/10) factor gave the FULL
     // turn rate at any speed ≥ 10, which at the old 34 u/s was twitchy.

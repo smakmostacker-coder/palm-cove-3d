@@ -1,62 +1,71 @@
-// Shared mutable game state. Every system module imports this single object
-// and reads/writes its fields directly — there is no event bus and no store
-// library; G is the contract between player, driving, police, missions, HUD
-// and the save system.
-//
-// v2 additions over the original build: the owned-weapons list with sniper
-// ammo and a scoped-aim flag, the chosen lead character, the story-tracking
-// record that feeds the six branching endings, and the endings unlocked so
-// far. The five-slot found-items inventory itself lives in inventory.js, which
-// attaches G.inventory / G.selectedSlot / G.armour on first use.
+// Central mutable game state. One shared object, G, holds everything
+// the game reads or changes at runtime; modules import it and mutate
+// its fields directly — no store, event bus, or framework here.
 export const G = {
-  mode: 'title', // title | playing | paused | stats | over | ending
-  prevMode: 'title',
+  // Flow and clock.
+  mode: 'title',
   time: 0,
+  // Cast: filled in at character selection, null until then.
+  lead: null,
+  partner: null,
+  // Player vitals and wallet.
   money: 120,
   health: 100,
+  // Police pressure: stars, bust progress, time out of sight.
   wanted: 0,
-  weapon: 'Fists',
-  character: 'vera', // 'vera' | 'dax' — set on the character-choice screen
-  weapons: ['Fists'], // owned weapons; Pistol arrives via story, Sniper by pickup
-  sniperAmmo: 0,
-  scoped: false,
-  district: 'Palm District',
-  objective: '',
-  prompt: '',
   bust: 0,
   losTimer: 0,
-  overKind: '',
-  overTimer: 0,
-  camYaw: 0,
-  camPitch: 0.32,
-  driving: null,
-  onFoot: true,
-  swimming: false, // derived per frame by player.js from the position (never latched in a save)
-  stats: { stolen: 0, drivenKm: 0, missions: 0, side: 0, punches: 0, shotsFired: 0, byClass: {} },
-  // Story tracking for the branching endings: mercy vs. ruthlessness, money
-  // earned honestly, times busted/wasted, and the finale choices in order.
-  track: { spared: 0, tookOut: 0, earned: 0, busted: 0, wasted: 0, finaleChoices: [] },
-  endingsUnlocked: [],
-  lastEnding: '',
-  missionIndex: 0,
-  missionStage: 0,
-  storyDone: false,
-  sideMode: null,
-  sideTimer: 0,
-  raceCp: 0,
-  dialogueUntil: 0,
-  seed: 1,
-  fpsFrames: 0,
-  keys: {},
-  joyVec: { x: 0, y: 0 }, // continuous analog joystick vector (main.js initJoystick)
-  sprintTouch: false, // touch RUN button held (main.js initJoystick)
-  boostTouch: false, // touch GAS button held, driving only (main.js initJoystick)
-  driveTouch: { up: false, down: false, left: false, right: false }, // touch driving D-pad held state (main.js initDrivePad)
-  mouseDown: false,
+  // Situation: what the player is currently inside of, if anything.
+  driving: null, // current vehicle object while driving
+  interior: null, // current interior id while indoors
+  swimming: false,
+  inPrison: 0,
+  scoped: false, // aiming through a scope
+  // Preferences: kept across runs (see resetRunState).
+  settings: {
+    sound: true,
+    fps: 60,
+    quality: 'high',
+    brightness: 1,
+    joystick: 1,
+  },
+  minimapZoom: 'MID',
+  radioStation: 0, // 0 = off, 1-3 = stations
+  // This run's tallies, plus the story choices made along the way.
+  stats: {
+    earned: 0,
+    busted: 0,
+    wasted: 0,
+    spared: 0,
+    tookOut: 0,
+    carsStolen: 0,
+    jobsDone: 0,
+    distanceKm: 0,
+    choices: [],
+  },
+  endingsFound: [], // meta progress across all runs; preserved
+  flags: {}, // free-form story flags set by missions
 };
 
-// Reset the per-run statistics and story tracking (new game / fresh stats).
-export function resetStats() {
-  G.stats = { stolen: 0, drivenKm: 0, missions: 0, side: 0, punches: 0, shotsFired: 0, byClass: {} };
-  G.track = { spared: 0, tookOut: 0, earned: 0, busted: 0, wasted: 0, finaleChoices: [] };
+// Restore the per-run fields to their defaults for a new game.
+// settings, minimapZoom, radioStation and endingsFound survive,
+// as does the lead/partner cast selection.
+export function resetRunState() {
+  G.time = 0;
+  G.money = 120;
+  G.health = 100;
+  G.wanted = 0;
+  G.bust = 0;
+  G.losTimer = 0;
+  G.driving = null;
+  G.interior = null;
+  G.swimming = false;
+  G.inPrison = 0;
+  G.scoped = false;
+  // Fresh objects so no stale references leak into the new run.
+  G.stats = {
+    earned: 0, busted: 0, wasted: 0, spared: 0, tookOut: 0,
+    carsStolen: 0, jobsDone: 0, distanceKm: 0, choices: [],
+  };
+  G.flags = {};
 }

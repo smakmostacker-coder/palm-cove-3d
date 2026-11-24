@@ -642,6 +642,7 @@ export function buildWorld(scene) {
   buildFacilities(world);
   buildNamedStructures(world);
   buildTownBuildings(world);
+  buildDressing(world);
 
   return world;
 }
@@ -656,6 +657,23 @@ export function updateCity(dt, t) {
   // The lighthouse beam sweeps the harbour entrance on a slow turn.
   if (lighthouseBeam) {
     lighthouseBeam.rotation.y += dt * 0.7;
+  }
+  // Traffic lights alternate axes every 4 seconds: one axis shows
+  // green while the crossing axis shows red, amber stays dark.
+  const phase = Math.floor(t / 4) % 2;
+  for (let i = 0; i < trafficLights.length; i++) {
+    const entry = trafficLights[i];
+    const ewGreen = phase === 0;
+    const active = entry.axis === 'ew'
+      ? (ewGreen ? 'green' : 'red')
+      : (ewGreen ? 'red' : 'green');
+    entry.mats.red.emissiveIntensity = active === 'red' ? 1.8 : 0.08;
+    entry.mats.amber.emissiveIntensity = active === 'amber' ? 1.8 : 0.08;
+    entry.mats.green.emissiveIntensity = active === 'green' ? 1.8 : 0.08;
+  }
+  // Radio beacon blinks at roughly 1 Hz by pulsing its emissive.
+  if (radioBeaconMat) {
+    radioBeaconMat.emissiveIntensity = Math.floor(t) % 2 === 0 ? 2.4 : 0.1;
   }
 }
 
@@ -1263,10 +1281,12 @@ function buildCityBuildings(parent) {
   const keepOut = cityKeepOutPoints();
   const xs = CITY_ROADS_X.slice().sort((a, b) => a - b);
   const zs = CITY_ROADS_Z.slice().sort((a, b) => a - b);
-  const prisonMinX = PRISON.x - 36 - 12;
-  const prisonMaxX = PRISON.x + 36 + 12;
-  const prisonMinZ = PRISON.z - 26 - 12;
-  const prisonMaxZ = PRISON.z + 26 + 12;
+  // Prison rectangle expanded by 4: lots are tested against it per-lot
+  // below, so a cell only loses the lots that actually overlap it.
+  const prisonMinX = PRISON.x - 36 - 4;
+  const prisonMaxX = PRISON.x + 36 + 4;
+  const prisonMinZ = PRISON.z - 26 - 4;
+  const prisonMaxZ = PRISON.z + 26 + 4;
 
   for (let ix = 0; ix < xs.length - 1; ix++) {
     for (let iz = 0; iz < zs.length - 1; iz++) {
@@ -1277,16 +1297,8 @@ function buildCityBuildings(parent) {
       const maxZ = zs[iz + 1] - 4;
       if (maxX - minX < 20 || maxZ - minZ < 20) continue;
 
-      // A cell is dropped when it overlaps the (padded) prison
-      // rectangle or when any anchor sits in or near it.
-      let blocked = minX < prisonMaxX && maxX > prisonMinX && minZ < prisonMaxZ && maxZ > prisonMinZ;
-      for (let k = 0; k < keepOut.length && !blocked; k++) {
-        if (pointNearRect(keepOut[k].x, keepOut[k].z, minX, maxX, minZ, maxZ, 12)) {
-          blocked = true;
-        }
-      }
-      if (blocked) continue;
-
+      // No wholesale cell skip: exclusion is per-lot inside the slot
+      // loop, so one facility anchor no longer empties a whole block.
       const onBoulevard = zs[iz] === 0 || zs[iz + 1] === 0;
       const coralHeights = zs[iz] === 75 && zs[iz + 1] === 150;
       const oldTown = xs[ix] >= -190 && xs[ix + 1] <= -75;
@@ -1306,6 +1318,18 @@ function buildCityBuildings(parent) {
         // Clamp the centre so the whole footprint stays in the cell.
         const bx = Math.max(minX + w / 2, Math.min(maxX - w / 2, cx));
         const bz = Math.max(minZ + d / 2, Math.min(maxZ - d / 2, cz));
+
+        // Per-lot exclusion: skip only this lot when its own centre is
+        // within 13 of a keep-out anchor, or its footprint would
+        // overlap the expanded prison rectangle.
+        let lotBlocked = bx - w / 2 < prisonMaxX && bx + w / 2 > prisonMinX
+          && bz - d / 2 < prisonMaxZ && bz + d / 2 > prisonMinZ;
+        for (let k = 0; k < keepOut.length && !lotBlocked; k++) {
+          const kdx = bx - keepOut[k].x;
+          const kdz = bz - keepOut[k].z;
+          if (kdx * kdx + kdz * kdz < 13 * 13) lotBlocked = true;
+        }
+        if (lotBlocked) continue;
 
         if (houseBand && chanceOf(0.5)) {
           addHouse(parent, bx, bz, w, d, pickOne(HOUSE_PALETTE), pickOne(HOUSE_ROOFS));
@@ -1353,6 +1377,9 @@ function buildFacilities(parent) {
     if (!anchor) continue;
     const face = facilityFace(f);
     const id = f.id || '';
+    // The B4 HOME house is the home's exterior at this same anchor, so
+    // building the 'home' facility too would stack two houses together.
+    if (id === 'home') continue;
     const name = f.name || id || 'SHOP';
     const isHospital = id === 'hospital';
     const isGas = id === 'gas';
@@ -1767,4 +1794,492 @@ function buildTownBuildings(parent) {
 
   // Restore the world seed so anything placed after towns stays stable.
   seedWith(WORLD_SEED);
+}
+
+// ---------------------------------------------------------------------------
+// Part C — dressing and life
+// ---------------------------------------------------------------------------
+// Static set dressing over the built city: the flyover deck, signals,
+// lamps, vegetation, highway stops and landmarks. Animated pieces keep
+// their materials in module-level slots so updateCity can drive them.
+
+// Per-light unique materials, so one head's lamps never share state
+// with another head that happens to use the same colour.
+const trafficLights = [];
+let radioBeaconMat = null;
+let radioBeacon = null;
+
+function addCylinder(parent, rTop, rBot, h, x, y, z, material, seg) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(rTop, rBot, h, seg || 10), material);
+  mesh.position.set(x, y, z);
+  parent.add(mesh);
+  return mesh;
+}
+
+function addSphere(parent, r, x, y, z, material) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), material);
+  mesh.position.set(x, y, z);
+  parent.add(mesh);
+  return mesh;
+}
+
+// Wide board texture for billboards and the arch: one line, big letters.
+const boardTexCache = new Map();
+function boardMaterial(text, bg, fg) {
+  const key = 'board|' + text + '|' + bg;
+  let m = boardTexCache.get(key);
+  if (m) return m;
+  const canvas = makeCanvas(512, 160);
+  if (!canvas) { m = mat(bg); boardTexCache.set(key, m); return m; }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) { m = mat(bg); boardTexCache.set(key, m); return m; }
+  ctx.fillStyle = cssColor(bg);
+  ctx.fillRect(0, 0, 512, 160);
+  ctx.strokeStyle = cssColor(fg);
+  ctx.lineWidth = 6;
+  ctx.strokeRect(8, 8, 496, 144);
+  ctx.fillStyle = cssColor(fg);
+  ctx.font = 'bold 44px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(text).toUpperCase(), 256, 84, 480);
+  m = new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(canvas) });
+  boardTexCache.set(key, m);
+  return m;
+}
+
+function addBoard(parent, w, h, x, y, z, text, bg, fg, ry) {
+  const mesh = new THREE.Mesh(unitBox(), boardMaterial(text, bg, fg));
+  mesh.scale.set(w, h, 0.25);
+  mesh.position.set(x, y, z);
+  if (ry) mesh.rotation.y = ry;
+  parent.add(mesh);
+  return mesh;
+}
+
+// --- C1: flyover deck -------------------------------------------------------
+
+function buildFlyoverDeck(parent) {
+  const deckMat = mat(0x3a3d44);
+  const railMat = mat(0xb9bdc4);
+  // Segmented slabs follow the same profile floorHeight reports, so
+  // what a mover stands on is exactly what it sees.
+  for (let z = -155; z <= 155; z += 10) {
+    const h = flyoverDeckHeight(z);
+    if (h <= 0.05) continue;
+    addBox(parent, 13, 0.5, 10.6, FLYOVER_X, h - 0.25, z, deckMat, 0);
+    // Guard rails run along both edges of every segment.
+    addBox(parent, 0.25, 0.7, 10.6, FLYOVER_X - 6.3, h + 0.35, z, railMat, 0);
+    addBox(parent, 0.25, 0.7, 10.6, FLYOVER_X + 6.3, h + 0.35, z, railMat, 0);
+  }
+  // Pillars down the centre line leave the ground road passable between
+  // them; each one is a real obstacle, hence the circle collider.
+  const pillarMat = mat(0x8b9096);
+  for (let z = -144; z <= 144; z += 24) {
+    const h = flyoverDeckHeight(z);
+    if (h <= 0.6) continue;
+    addCylinder(parent, 0.9, 1.05, h, FLYOVER_X, h / 2, z, pillarMat, 12);
+    registerCircle(FLYOVER_X, z, 1.1);
+  }
+  // Name board on the east side of the flat middle span.
+  addSignBoard(parent, 12, 1.8, FLYOVER_X + 6.75, 4.2, 0, 'PALM FLYOVER', Math.PI / 2);
+}
+
+// --- C2: traffic lights -----------------------------------------------------
+
+function makeLampHead(parent, x, y, z, axis) {
+  addBox(parent, 0.55, 1.5, 0.55, x, y, z, mat(0x17181c), 0);
+  // Unique emissive materials per lamp: updateCity drives these.
+  const mats = {
+    red: new THREE.MeshLambertMaterial({ color: 0xff2a20, emissive: 0xff2a20, emissiveIntensity: 0.08 }),
+    amber: new THREE.MeshLambertMaterial({ color: 0xffa018, emissive: 0xffa018, emissiveIntensity: 0.08 }),
+    green: new THREE.MeshLambertMaterial({ color: 0x2aff5a, emissive: 0x2aff5a, emissiveIntensity: 0.08 }),
+  };
+  addBox(parent, 0.3, 0.3, 0.3, x, y + 0.48, z, mats.red, 0);
+  addBox(parent, 0.3, 0.3, 0.3, x, y, z, mats.amber, 0);
+  addBox(parent, 0.3, 0.3, 0.3, x, y - 0.48, z, mats.green, 0);
+  trafficLights.push({ axis, mats });
+}
+
+function buildTrafficLights(parent) {
+  const poleMat = mat(0x3c4048);
+  const xs = [-150, -75, 75, 150];
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i];
+    // East-west head: pole on the south-east corner, arm reaching north
+    // over the boulevard, head hanging at its end.
+    addCylinder(parent, 0.12, 0.14, 5.4, x + 8.5, 2.7, 12.5, poleMat, 8);
+    registerCircle(x + 8.5, 12.5, 0.3);
+    addBox(parent, 0.16, 0.16, 7, x + 8.5, 5.35, 9.2, poleMat, 0);
+    makeLampHead(parent, x + 8.5, 4.4, 6.2, 'ew');
+    // North-south head: opposite corner, arm reaching east over the
+    // cross street so the two axes read independently.
+    addCylinder(parent, 0.12, 0.14, 5.4, x - 8.5, 2.7, -12.5, poleMat, 8);
+    registerCircle(x - 8.5, -12.5, 0.3);
+    addBox(parent, 7, 0.16, 0.16, x - 5.2, 5.35, -12.5, poleMat, 0);
+    makeLampHead(parent, x - 2.2, 4.4, -12.5, 'ns');
+  }
+}
+
+// --- C3: street lamps -------------------------------------------------------
+
+function buildStreetLamp(parent, x, z, armDirX, armDirZ) {
+  const poleMat = mat(0x4a4d52);
+  addCylinder(parent, 0.09, 0.11, 4.6, x, 2.3, z, poleMat, 8);
+  addBox(parent, Math.abs(armDirX) > 0 ? 1.8 : 0.14, 0.14,
+    Math.abs(armDirZ) > 0 ? 1.8 : 0.14,
+    x + armDirX * 0.85, 4.55, z + armDirZ * 0.85, poleMat, 0);
+  // Warm head over the kerb edge the arm points toward.
+  addBox(parent, 0.55, 0.22, 0.55, x + armDirX * 1.7, 4.5, z + armDirZ * 1.7,
+    mat(0xffdf9e, { emissive: 0xccaa55 }), 0);
+  registerCircle(x, z, 0.3);
+}
+
+function buildStreetLamps(parent) {
+  // Boulevard: both kerbs, staggered every 30 units.
+  for (let x = -180; x <= 180; x += 30) {
+    buildStreetLamp(parent, x, -12.8, 0, 1);
+    buildStreetLamp(parent, x + 15, 12.8, 0, -1);
+  }
+  // Each town's main street (its southern east-west street).
+  for (let t = 0; t < TOWNS.length; t++) {
+    const tz = townZOf(TOWNS[t]) + 40;
+    for (let x = -60; x <= 60; x += 30) {
+      buildStreetLamp(parent, x, tz - 6.6, 0, 1);
+      buildStreetLamp(parent, x + 15, tz + 6.6, 0, -1);
+    }
+  }
+}
+
+// --- C4: vegetation ---------------------------------------------------------
+
+function buildPalm(parent, x, z) {
+  const trunkMat = mat(0x8a6f4d);
+  const frondMat = mat(0x3f7d33);
+  const segH = floatBetween(1.5, 1.9);
+  // Lean direction is seeded, so the same palm leans the same way on
+  // every load; segments lean progressively like a real curved trunk.
+  const ang = nextFloat() * Math.PI * 2;
+  const dx = Math.cos(ang);
+  const dz = Math.sin(ang);
+  const stepLean = 0.3;
+  for (let i = 0; i < 3; i++) {
+    const off = stepLean * (i + 0.5);
+    const seg = addCylinder(parent, 0.17 - i * 0.03, 0.22 - i * 0.03, segH,
+      x + dx * off, segH * (i + 0.5), z + dz * off, trunkMat, 7);
+    seg.rotation.z = -dx * 0.18;
+    seg.rotation.x = dz * 0.18;
+  }
+  const topX = x + dx * stepLean * 3;
+  const topZ = z + dz * stepLean * 3;
+  const topY = segH * 3;
+  // Six fronds fan out from the crown, each a flattened tilted box.
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const frond = addMesh(parent, new THREE.BoxGeometry(0.28, 0.06, 2.4),
+      frondMat, topX + Math.cos(a) * 1.05, topY + 0.25, topZ + Math.sin(a) * 1.05);
+    frond.rotation.y = -a + Math.PI / 2;
+    frond.rotation.x = Math.sin(a) * 0.5;
+    frond.rotation.z = -Math.cos(a) * 0.5;
+  }
+  addSphere(parent, 0.32, topX, topY + 0.05, topZ, mat(0x6e5638));
+  registerCircle(x, z, 0.45);
+}
+
+function buildLeafyTree(parent, x, z) {
+  addCylinder(parent, 0.22, 0.3, 2.3, x, 1.15, z, mat(0x74584a), 8);
+  const leafMat = mat(pickOne([0x4d8f3f, 0x5da24a, 0x3f7d33]));
+  addSphere(parent, floatBetween(1.6, 2.0), x, 3.4, z, leafMat);
+  addSphere(parent, 1.3, x + 1.0, 2.8, z + 0.5, leafMat);
+  addSphere(parent, 1.15, x - 0.9, 2.9, z - 0.6, leafMat);
+  registerCircle(x, z, 0.45);
+}
+
+function buildVegetation(parent) {
+  // Boulevard median palms, skipping the crossings where the median
+  // strip itself is broken for cross traffic.
+  for (let x = -182; x <= 182; x += 26) {
+    let nearCrossing = false;
+    for (let i = 0; i < CITY_ROADS_Z.length; i++) {
+      if (Math.abs(x - CITY_ROADS_Z[i]) < 11) nearCrossing = true;
+    }
+    if (!nearCrossing) buildPalm(parent, x, 0);
+  }
+  // Beach palms scattered along the east shore.
+  for (let i = 0; i < 14; i++) {
+    buildPalm(parent, floatBetween(174, 186), floatBetween(-40, 120));
+  }
+  // A loose ring of palms around Key Solano's huts.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.2;
+    buildPalm(parent, KEY_TOWN.x + Math.cos(a) * floatBetween(36, 46),
+      KEY_TOWN.z + Math.sin(a) * floatBetween(34, 44));
+  }
+  // Leafy trees shade the towns' block interiors.
+  for (let t = 0; t < TOWNS.length; t++) {
+    const tz = townZOf(TOWNS[t]);
+    for (let i = 0; i < 10; i++) {
+      let x = floatBetween(-64, 64);
+      if (Math.abs(x) < 11) x += x < 0 ? -14 : 14;
+      const z = tz + pickOne([-58, -22, 22, 58]) + floatBetween(-4, 4);
+      buildLeafyTree(parent, x, z);
+    }
+  }
+  // Coral Heights gardens: the leafy band between z 75 and z 150.
+  for (let i = 0; i < 12; i++) {
+    let x = floatBetween(-170, 170);
+    for (let r = 0; r < CITY_ROADS_X.length; r++) {
+      if (Math.abs(x - CITY_ROADS_X[r]) < 10) x += 16;
+    }
+    buildLeafyTree(parent, x, floatBetween(86, 140));
+  }
+}
+
+// --- C5: farms, trailers, rest stops, billboards ----------------------------
+
+function buildFarm(parent, fx, fz) {
+  // Red barn with a pyramid roof, solid enough to need its own AABB.
+  addBox(parent, 10, 5, 8, fx, 2.5, fz, mat(0xa83226), 0);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 4), mat(0x6e3a2a));
+  roof.rotation.y = Math.PI / 4;
+  roof.scale.set(10 * 0.72, 2.6, 8 * 0.72);
+  roof.position.set(fx, 5 + 1.3, fz);
+  parent.add(roof);
+  addBox(parent, 3, 3.4, 0.2, fx, 1.7, fz + 4.05, mat(0xf0ead8), 0);
+  registerBox(fx - 4.8, fx + 4.8, fz - 3.8, fz + 3.8);
+  // Silo: tall cylinder with a hemispherical cap beside the barn.
+  const sx = fx + 9;
+  addCylinder(parent, 2, 2, 11, sx, 5.5, fz, mat(0xb9bdc4), 14);
+  const cap = new THREE.Mesh(
+    new THREE.SphereGeometry(2, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+    mat(0x8b9096));
+  cap.position.set(sx, 11, fz);
+  parent.add(cap);
+  registerCircle(sx, fz, 2.2);
+  // Crop rows run parallel east of the barn.
+  const cropMat = mat(0x5da24a);
+  for (let i = 0; i < 9; i++) {
+    addBox(parent, 1.2, 0.5, 28, fx + 18 + i * 2.4, 0.25, fz, cropMat, 0);
+  }
+  // Fence posts line the front of the plot.
+  for (let x = fx - 12; x <= fx + 30; x += 3) {
+    addBox(parent, 0.18, 1.1, 0.18, x, 0.55, fz + 12, mat(0x74584a), 0);
+  }
+  addBox(parent, 42, 0.14, 0.14, fx + 9, 0.95, fz + 12, mat(0x8a6f4d), 0);
+}
+
+function buildTrailers(parent) {
+  const cx = -52;
+  const cz = -1750;
+  const spots = [[-11, -7], [10, -8], [-9, 8], [12, 6]];
+  const colours = [0xd8d3c3, 0xb7c3c9, 0xe3d9c0, 0xc9a689];
+  for (let i = 0; i < spots.length; i++) {
+    const tx = cx + spots[i][0];
+    const tz = cz + spots[i][1];
+    // Stilts lift the body clear of the ground like a parked trailer.
+    const stiltMat = mat(0x6e6a60);
+    addBox(parent, 0.35, 0.6, 0.35, tx - 3, 0.3, tz - 1, stiltMat, 0);
+    addBox(parent, 0.35, 0.6, 0.35, tx + 3, 0.3, tz - 1, stiltMat, 0);
+    addBox(parent, 0.35, 0.6, 0.35, tx - 3, 0.3, tz + 1, stiltMat, 0);
+    addBox(parent, 0.35, 0.6, 0.35, tx + 3, 0.3, tz + 1, stiltMat, 0);
+    addBox(parent, 7.4, 2.7, 2.8, tx, 0.6 + 1.35, tz, mat(colours[i]), 0);
+    addBox(parent, 7.5, 0.18, 2.9, tx, 3.4, tz, mat(0x8b9096), 0);
+    // Awning shades the long south side of each unit.
+    const awn = addBox(parent, 5.5, 0.08, 1.6, tx, 2.7, tz + 2.1, mat(0xd8542e), 0);
+    awn.rotation.x = 0.25;
+    registerBox(tx - 3.5, tx + 3.5, tz - 1.2, tz + 1.2);
+  }
+  // Shared fire pit at the middle of the cluster.
+  addCylinder(parent, 1.0, 1.1, 0.35, cx, 0.18, cz, mat(0x2c2a26), 12);
+  addBox(parent, 0.5, 0.3, 0.5, cx, 0.45, cz, mat(0xff7a2a, { emissive: 0xcc4400 }), 0);
+}
+
+function buildRestStop(parent, rx, rz) {
+  const poleMat = mat(0x74584a);
+  const corners = [[-3.6, -2.6], [3.6, -2.6], [-3.6, 2.6], [3.6, 2.6]];
+  for (let i = 0; i < corners.length; i++) {
+    const px = rx + corners[i][0];
+    const pz = rz + corners[i][1];
+    addCylinder(parent, 0.13, 0.13, 3, px, 1.5, pz, poleMat, 8);
+    registerCircle(px, pz, 0.25);
+  }
+  // Flat canopy roof shades the tables below.
+  addBox(parent, 8.6, 0.25, 6.2, rx, 3.1, rz, mat(0x9c5a3c), 0);
+  for (let i = 0; i < 2; i++) {
+    const tx = rx - 2 + i * 4;
+    // Picnic table: top slab on two legs, benches either side.
+    addBox(parent, 1.9, 0.1, 0.95, tx, 0.78, rz, mat(0x8a6f4d), 0);
+    addBox(parent, 0.14, 0.75, 0.85, tx - 0.7, 0.38, rz, poleMat, 0);
+    addBox(parent, 0.14, 0.75, 0.85, tx + 0.7, 0.38, rz, poleMat, 0);
+    addBox(parent, 1.9, 0.08, 0.35, tx, 0.45, rz - 0.85, mat(0x8a6f4d), 0);
+    addBox(parent, 1.9, 0.08, 0.35, tx, 0.45, rz + 0.85, mat(0x8a6f4d), 0);
+  }
+  addSignBoard(parent, 3.6, 1.0, rx, 2.2, rz + 3.3, 'REST STOP', 0);
+}
+
+function buildBillboards(parent) {
+  const slogans = [
+    'VISIT PALM COVE',
+    'COVE BANK — SUNNIER MONEY',
+    'MARLIN ARMS',
+    'CLUB NEON PALMS — ALL NIGHT',
+    'FAR SHORE MOTEL',
+    'PALM KITCHEN — EAT',
+  ];
+  const zs = [-600, -1200, -1900, -2500, -3300, -3900];
+  const poleMat = mat(0x6e7278);
+  for (let i = 0; i < zs.length; i++) {
+    // Boards alternate sides of the highway so both directions read.
+    const bx = i % 2 === 0 ? 17 : -17;
+    const bz = zs[i];
+    addCylinder(parent, 0.22, 0.22, 7, bx, 3.5, bz - 3.4, poleMat, 8);
+    addCylinder(parent, 0.22, 0.22, 7, bx, 3.5, bz + 3.4, poleMat, 8);
+    registerCircle(bx, bz - 3.4, 0.35);
+    registerCircle(bx, bz + 3.4, 0.35);
+    // Panel runs along z and faces the highway traffic.
+    const panel = new THREE.Mesh(unitBox(),
+      boardMaterial(slogans[i], 0x14324a, 0xf7efdb));
+    panel.scale.set(10, 4, 0.3);
+    panel.position.set(bx, 8.6, bz);
+    panel.rotation.y = Math.PI / 2;
+    parent.add(panel);
+    addBox(parent, 0.35, 4.2, 10.3, bx + (bx > 0 ? 0.25 : -0.25), 8.6, bz, mat(0x2c2f35), 0);
+  }
+}
+
+// --- C6: landmarks and beach props ------------------------------------------
+
+function buildArch(parent) {
+  const stone = mat(0xd8c9a3);
+  // Pillars stand on the road edges so the boulevard stays passable.
+  addBox(parent, 1.4, 7.5, 1.4, 120, 3.75, -13, stone, 0);
+  addBox(parent, 1.4, 7.5, 1.4, 120, 3.75, 13, stone, 0);
+  registerBox(120 - 0.7, 120 + 0.7, -13 - 0.7, -13 + 0.7);
+  registerBox(120 - 0.7, 120 + 0.7, 13 - 0.7, 13 + 0.7);
+  addBox(parent, 1.6, 1.7, 28.5, 120, 8.2, 0, stone, 0);
+  // Big letters face both directions of boulevard traffic.
+  addBoard(parent, 17, 2.4, 119.1, 8.2, 0, 'PALM COVE', 0x14324a, 0xf7efdb, -Math.PI / 2);
+  addBoard(parent, 17, 2.4, 120.9, 8.2, 0, 'PALM COVE', 0x14324a, 0xf7efdb, Math.PI / 2);
+  BUILD_STATS.namedStructures++;
+}
+
+function buildWaterTower(parent) {
+  const wx = -160;
+  const wz = -182;
+  const legMat = mat(0x8b9096);
+  const legs = [[-3, -3], [3, -3], [-3, 3], [3, 3]];
+  for (let i = 0; i < legs.length; i++) {
+    addBox(parent, 0.45, 12, 0.45, wx + legs[i][0], 6, wz + legs[i][1], legMat, 0);
+  }
+  // Cross braces keep the spindly legs reading as one structure.
+  addBox(parent, 6.4, 0.25, 0.25, wx, 4, wz - 3, legMat, 0);
+  addBox(parent, 6.4, 0.25, 0.25, wx, 8, wz + 3, legMat, 0);
+  addBox(parent, 0.25, 0.25, 6.4, wx - 3, 8, wz, legMat, 0);
+  addBox(parent, 0.25, 0.25, 6.4, wx + 3, 4, wz, legMat, 0);
+  const tank = addCylinder(parent, 4.5, 4.5, 6, wx, 15, wz, mat(0xb7c3c9), 18);
+  tank.scale.z = 1;
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(4.9, 2, 18), mat(0x9c5a3c));
+  cap.position.set(wx, 19, wz);
+  parent.add(cap);
+  // Painted name rides on a board bolted to the tank's south face.
+  addSignBoard(parent, 8, 1.8, wx, 15.4, wz + 4.6, 'PALM COVE', 0);
+  // One AABB covers the whole leg footprint.
+  registerBox(wx - 3.5, wx + 3.5, wz - 3.5, wz + 3.5);
+  BUILD_STATS.namedStructures++;
+}
+
+function buildRadioTower(parent) {
+  const tx = -120;
+  const tz = -500;
+  const mastMat = mat(0x9aa0a8);
+  const height = 46;
+  // Four legs slant inward as they climb, giving the mast its taper.
+  const legBase = [[-3, -3], [3, -3], [-3, 3], [3, 3]];
+  for (let i = 0; i < legBase.length; i++) {
+    const lx = legBase[i][0];
+    const lz = legBase[i][1];
+    const leg = addBox(parent, 0.32, height, 0.32,
+      tx + lx * 0.55, height / 2, tz + lz * 0.55, mastMat, 0);
+    leg.rotation.z = lx > 0 ? 0.058 : -0.058;
+    leg.rotation.x = lz > 0 ? -0.058 : 0.058;
+  }
+  // Cross-braced square rings shrink with height up the mast.
+  for (let lvl = 0; lvl < 5; lvl++) {
+    const y = 8 + lvl * 8;
+    const half = 3 - (y / height) * 2.2;
+    addBox(parent, half * 2, 0.2, 0.2, tx, y, tz - half, mastMat, 0);
+    addBox(parent, half * 2, 0.2, 0.2, tx, y, tz + half, mastMat, 0);
+    addBox(parent, 0.2, 0.2, half * 2, tx - half, y, tz, mastMat, 0);
+    addBox(parent, 0.2, 0.2, half * 2, tx + half, y, tz, mastMat, 0);
+  }
+  addBox(parent, 1.6, 1.2, 1.6, tx, height + 0.4, tz, mat(0x4a4d52), 0);
+  // Blinking beacon: its material is kept aside for updateCity.
+  radioBeaconMat = new THREE.MeshLambertMaterial({
+    color: 0xff2a20, emissive: 0xff2a20, emissiveIntensity: 2.4,
+  });
+  radioBeacon = addSphere(parent, 0.55, tx, height + 1.6, tz, radioBeaconMat);
+  registerCircle(tx, tz, 3.6);
+  BUILD_STATS.namedStructures++;
+}
+
+function buildFlamingo(parent) {
+  const fx = 184;
+  const fz = 12;
+  const pink = mat(0xe86a9a);
+  const darkPink = mat(0xd14f83);
+  // Two thin legs hold the body about seven units tall overall.
+  addCylinder(parent, 0.09, 0.09, 3.2, fx - 0.5, 1.6, fz, darkPink, 6);
+  addCylinder(parent, 0.09, 0.09, 3.2, fx + 0.5, 1.6, fz + 0.3, darkPink, 6);
+  const body = addSphere(parent, 1.7, fx, 4.1, fz, pink);
+  body.scale.set(1.05, 0.85, 1.35);
+  addSphere(parent, 1.0, fx, 4.3, fz - 1.6, darkPink);
+  // S-neck: segments climb, then tip forward into the head.
+  const neckPts = [[0, 4.9, -1.9], [0, 5.8, -2.2], [0, 6.5, -2.0], [0, 6.9, -1.5]];
+  for (let i = 0; i < neckPts.length; i++) {
+    addCylinder(parent, 0.26, 0.3, 1.0,
+      fx + neckPts[i][0], neckPts[i][1], fz + neckPts[i][2], pink, 8);
+  }
+  addSphere(parent, 0.55, fx, 7.1, fz - 1.2, pink);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.1, 8), mat(0xf2a03c));
+  beak.rotation.x = Math.PI / 2 + 0.5;
+  beak.position.set(fx, 6.95, fz - 0.5);
+  parent.add(beak);
+  registerCircle(fx, fz, 1.8);
+  BUILD_STATS.namedStructures++;
+}
+
+function buildBeachProps(parent) {
+  const canopyColours = [0xd8542e, 0x2b6ea8, 0xf2c12e, 0x3fae6a, 0xe86a9a, 0x7a5fd0];
+  for (let i = 0; i < 6; i++) {
+    const ux = floatBetween(178, 186);
+    const uz = -30 + i * 28 + floatBetween(-6, 6);
+    addCylinder(parent, 0.06, 0.06, 2.3, ux, 1.15, uz, mat(0xf0ead8), 6);
+    const canopy = new THREE.Mesh(
+      new THREE.ConeGeometry(1.9, 0.75, 10), mat(canopyColours[i]));
+    canopy.position.set(ux, 2.5, uz);
+    parent.add(canopy);
+    // Towel flat on the sand beside each umbrella.
+    const towel = addBox(parent, 1.1, 0.04, 2.1, ux + 1.8, 0.05, uz + 0.6,
+      mat(canopyColours[(i + 2) % canopyColours.length]), 0);
+    towel.rotation.y = floatBetween(-0.5, 0.5);
+  }
+}
+
+function buildDressing(parent) {
+  buildFlyoverDeck(parent);
+  buildTrafficLights(parent);
+  buildStreetLamps(parent);
+  buildVegetation(parent);
+  buildFarm(parent, 60, -900);
+  buildFarm(parent, -70, -2600);
+  buildTrailers(parent);
+  buildRestStop(parent, 12, -900);
+  buildRestStop(parent, -12, -3050);
+  buildBillboards(parent);
+  buildArch(parent);
+  buildWaterTower(parent);
+  buildRadioTower(parent);
+  buildFlamingo(parent);
+  buildBeachProps(parent);
 }
